@@ -143,14 +143,14 @@ adding an entry.
 - Particles are pooled and recycled; nothing allocates mid-flight.
 - If the frame rate sits low, internal resolution drops before anything else.
 
-Measured on the build in this repository: ~198,000 triangles and 99 draw calls for the full
-city, with world updates at about 0.3 ms per frame.
+Measured on the build in this repository: about 198,000 triangles and 110 draw calls for
+the full city, with world updates at roughly 0.3 ms per frame.
 
 ## Tests
 
 ```bash
 npm run test:flight   # 24 physics assertions, plain Node, no browser
-node tests/content.test.js   # 17 content assertions
+node tests/content.test.js   # 19 content assertions
 npm test              # the above plus the headless end-to-end run
 ```
 
@@ -160,9 +160,10 @@ holds altitude, that a dive beats level beats a climb, that a stall is recoverab
 takeoff and landing gates work, and that a long frame cannot teleport the aircraft through
 a wall.
 
-`tests/content.test.js` validates authored data — it is what caught three checkpoints
-buried inside the mountain, and the balance bug where a fully upgraded Talon out-ran a
-stock Meridian.
+`tests/content.test.js` validates authored data against the generated world — it is what
+caught three checkpoints buried inside the mountain, three more inside buildings and
+landmarks, the city generator placing buildings across the runway, and the balance bug
+where a fully upgraded Talon out-ran a stock Meridian.
 
 `tests/smoke.test.js` serves the production build, drives it in headless Chromium, and
 flies the first mission using real key events. It checks the city generates, the scene

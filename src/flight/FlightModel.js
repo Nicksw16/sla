@@ -3,9 +3,6 @@ import { clamp, clamp01, damp, smoothstep, moveTowards } from '../core/MathUtils
 
 const G = 9.81;
 
-// Axis conventions (verified by tests/flight.test.js):
-//   forward = -Z, pitch up = +X, roll right = -Z, yaw right = -Y,
-//   coordinated right turn = rotation about world -Y.
 /**
  * Parasitic drag as a fraction of available thrust, against speed as a fraction
  * of the current maximum. Equals exactly 1 at x = 1.
@@ -47,6 +44,9 @@ function inducedDrag(airspeed, stallSpeed) {
   return INDUCED_REF * (r >= 1 ? 1 / (r * r) : r * r);
 }
 
+// Axis conventions, pinned by tests/flight.test.js:
+//   forward = -Z, pitch up = +X, roll right = -Z, yaw right = -Y,
+//   and a coordinated right turn is a rotation about world -Y.
 const AX_PITCH = new THREE.Vector3(1, 0, 0);
 const AX_ROLL = new THREE.Vector3(0, 0, -1);
 const AX_YAW = new THREE.Vector3(0, -1, 0);

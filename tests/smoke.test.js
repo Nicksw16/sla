@@ -481,6 +481,7 @@ async function flyMission(page, budgetMs) {
   };
 
   let lastPassed = 0;
+  let lastReport = Date.now();
   while (Date.now() < deadline) {
     const s = await page.evaluate(() => {
       const g = window.__skyline;
@@ -515,14 +516,22 @@ async function flyMission(page, budgetMs) {
       lastPassed = s.passed;
       console.log(`       gate ${s.passed}/${s.total} at ${Math.round(s.speed * 3.6)} km/h`);
     }
+    // Periodic state dump, so a stalled pilot is visible rather than silent.
+    if (Date.now() - lastReport > 15000) {
+      lastReport = Date.now();
+      console.log(`       on gate ${s.passed + 1}: ${Math.round(s.dist)} m out, `
+        + `bearing ${(s.bearing * 57.3).toFixed(0)} deg, elev ${(s.elevation * 57.3).toFixed(0)} deg, `
+        + `${Math.round(s.speed * 3.6)} km/h, ${Math.round(s.agl)} m agl`);
+    }
 
     const want = new Set();
     // Roll toward a bank angle proportional to the bearing error.
     const targetBank = Math.max(-0.85, Math.min(0.85, s.bearing * 1.6));
     if (targetBank - s.bank > 0.08) want.add('d');
     else if (targetBank - s.bank < -0.08) want.add('a');
-    // Pitch toward the gate, and always away from the ground.
-    const wantClimb = s.agl < 140 ? 0.25 : s.elevation + Math.abs(s.bank) * 0.14;
+    // Pitch toward the gate. The ground reflex is deliberately tight: at 140 m it
+    // fired over every tall building downtown and pulled the aircraft off the gate.
+    const wantClimb = s.agl < 70 ? 0.3 : s.elevation + Math.abs(s.bank) * 0.14;
     if (wantClimb > 0.05) want.add('ArrowUp');
     else if (wantClimb < -0.06) want.add('ArrowDown');
     // Keep the throttle up, and ease off only if genuinely overspeeding into a corner.
@@ -530,7 +539,7 @@ async function flyMission(page, budgetMs) {
     else if (Math.abs(s.bearing) > 0.7 && s.dist < 300) want.add('s');
 
     await setKeys(want);
-    await sleep(110);
+    await sleep(80);
   }
 
   await setKeys(new Set());
