@@ -40,20 +40,35 @@ let html = await readFile(path.join(WORK, 'index.html'), 'utf8');
 // A closing script tag inside the bundle would end the inline block early.
 const safe = (js) => js.replace(/<\/script/gi, '<\\/script');
 
+// The replacement must go through a function: minified code is full of $& and $1,
+// which a string replacement would treat as capture-group references and splice the
+// surrounding HTML into the middle of the bundle. That produces a file that looks
+// right and does not parse.
+// The script moves to the end of the body rather than staying where the module tag
+// was. A module is deferred by default and a plain inline script is not, so left in
+// the head it would run against a document with no body yet and die reading the
+// canvas it is given.
+const scripts = [];
 for (const [tag, href] of [...html.matchAll(/<script[^>]*src="([^"]+)"[^>]*><\/script>/g)].map((m) => [m[0], m[1]])) {
-  html = html.replace(tag, `<script>\n${safe(await read(href))}\n</script>`);
+  scripts.push(safe(await read(href)));
+  html = html.replace(tag, () => '');
 }
 for (const [tag, href] of [...html.matchAll(/<link[^>]*rel="stylesheet"[^>]*href="([^"]+)"[^>]*>/g)].map((m) => [m[0], m[1]])) {
-  html = html.replace(tag, `<style>\n${await read(href)}\n</style>`);
+  const css = await read(href);
+  html = html.replace(tag, () => `<style>\n${css}\n</style>`);
 }
 html = html.replace(/<link[^>]*rel="modulepreload"[^>]*>\s*/g, '');
+const inline = scripts.map((js) => `<script>\n${js}\n</script>`).join('\n');
+html = html.includes('</body>')
+  ? html.replace('</body>', () => `${inline}\n</body>`)
+  : `${html}\n${inline}`;
 
 await writeFile(OUT, html);
 await rm(WORK, { recursive: true, force: true });
 
 const kb = Math.round(Buffer.byteLength(html) / 1024);
 console.log(`\nSKYLINE-FLIGHT.html — ${kb} KB, one file, no install needed.`);
-if (/src="|href="\.\/assets/.test(html)) {
+if (scripts.length === 0 || /src="\.?\/?assets|href="\.?\/?assets/.test(html)) {
   console.error('WARNING: the page still references an external file; it will not work offline.');
   process.exitCode = 1;
 }

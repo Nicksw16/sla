@@ -9,11 +9,12 @@
     "build": "vite build",
     "build:single": "node tools/build-single.mjs",
     "preview": "vite preview --port 4173",
-    "test": "npm run test:unit && npm run build && npm run test:e2e",
+    "test": "npm run test:unit && npm run build && npm run test:e2e && npm run test:standalone",
     "test:unit": "node tests/flight.test.js && node tests/content.test.js",
     "test:flight": "node tests/flight.test.js",
     "test:content": "node tests/content.test.js",
-    "test:e2e": "node tests/smoke.test.js"
+    "test:e2e": "node tests/smoke.test.js",
+    "test:standalone": "node tests/standalone.test.js"
   },
   "dependencies": {
     "three": "^0.186.0"

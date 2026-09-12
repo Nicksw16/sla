@@ -182,6 +182,7 @@ draw calls, with world updates at about 0.3 ms per frame.
 npm run test:flight    # 27 physics assertions, plain Node, no renderer
 npm run test:content   # 19 content assertions against the generated world
 npm run test:e2e       # headless browser run (needs a build first)
+npm run test:standalone # builds SKYLINE-FLIGHT.html and plays it off the disk
 npm test               # all of it
 ```
 
@@ -208,6 +209,13 @@ backup, upgrades reach the flown aircraft, collisions cause damage, every weathe
 renders, the beacons can be found and pay out, free flight can be set up and launched
 with the chosen weather, the championship celebration appears once, and the aircraft can
 take off from the runway.
+
+`tests/standalone.test.js` builds `SKYLINE-FLIGHT.html` and opens it over `file://`, the
+way a person double-clicking it does. It exists because that build broke twice in ways
+that left a page which looked fine and did nothing: once from `$&` in the minified
+bundle being read as a capture-group reference while inlining, and once because an
+inline script in the head runs before the body exists, which the module it replaced
+did not.
 
 ## Known limits
 
