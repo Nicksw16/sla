@@ -60,6 +60,20 @@ function serve(dir) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Waits for a predicate instead of sleeping a guessed number of milliseconds.
+ * Under software rendering a single frame can take longer than any sleep worth
+ * writing, so "press the key, sleep 250 ms, read the state" tests the renderer.
+ */
+async function waitFor(page, fn, arg = null, timeout = 8000) {
+  try {
+    await page.waitForFunction(fn, arg, { timeout });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Clicks within the active screen. The same data-action appears on several screens. */
 const clickActive = (page, action) => page.click(`.screen.active [data-action="${action}"]`);
 
@@ -253,12 +267,15 @@ async function main() {
     `${turbo0.toFixed(0)} -> ${turboState.e.toFixed(0)}`);
 
   await page.keyboard.press('c');
-  await sleep(250);
+  const cycled = await waitFor(page, () => window.__skyline.cameraController.mode !== 'chase');
   const camMode = await page.evaluate(() => window.__skyline.cameraController.mode);
-  check('C cycles the camera', camMode !== 'chase', `mode=${camMode}`);
-  await page.keyboard.press('c');
-  await page.keyboard.press('c');
-  await sleep(200);
+  check('C cycles the camera', cycled, `mode=${camMode}`);
+  // Back round to the chase camera for the flying section.
+  for (let i = 0; i < 3 && (await page.evaluate(() => window.__skyline.cameraController.mode)) !== 'chase'; i++) {
+    await page.keyboard.press('c');
+    await waitFor(page, () => true, null, 600);
+    await sleep(400);
+  }
 
   // ---------------------------------------------------------------- flying it
   console.log('\n  flying the mission with keyboard input…');
@@ -366,16 +383,15 @@ async function main() {
 
   // ---------------------------------------------------------------- pause
   await page.keyboard.press('Escape');
-  await sleep(400);
+  const didPause = await waitFor(page, () => window.__skyline.state === 'paused');
   const paused = await page.evaluate(() => ({
     state: window.__skyline.state,
     visible: document.getElementById('screen-pause').classList.contains('active'),
   }));
-  check('Escape pauses and shows the pause screen', paused.state === 'paused' && paused.visible, JSON.stringify(paused));
+  check('Escape pauses and shows the pause screen', didPause && paused.visible, JSON.stringify(paused));
   await clickActive(page, 'resume');
-  await sleep(300);
-  const resumed = await page.evaluate(() => window.__skyline.state);
-  check('the game resumes', resumed === 'playing', `state=${resumed}`);
+  const didResume = await waitFor(page, () => window.__skyline.state === 'playing');
+  check('the game resumes', didResume, `state=${await page.evaluate(() => window.__skyline.state)}`);
 
   // ---------------------------------------------------------------- collisions
   const collision2 = await page.evaluate(async () => {
