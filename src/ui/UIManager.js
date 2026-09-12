@@ -4,6 +4,7 @@ import { AIRCRAFT, AIRCRAFT_ORDER, statBars } from '../data/aircraft.js';
 import { REGIONS, REGION_ORDER } from '../data/regions.js';
 import { PAINTS, PAINT_ORDER, UPGRADE_TREE, UPGRADE_ORDER, applyUpgrades, upgradeCost } from '../data/upgrades.js';
 import { weatherLabel } from '../data/weather.js';
+import { SECRETS } from '../data/secrets.js';
 import { QUALITY_PRESETS } from '../core/Settings.js';
 
 /**
@@ -15,7 +16,8 @@ import { QUALITY_PRESETS } from '../core/Settings.js';
  * time. Every list is generated from the same data the game runs on, so a new mission
  * appears in the map screen without touching this file (§92).
  */
-const SCREENS = ['loading', 'main', 'map', 'hangar', 'stats', 'settings', 'results', 'pause', 'briefing'];
+const SCREENS = ['loading', 'main', 'map', 'hangar', 'stats', 'settings', 'results', 'pause',
+  'briefing', 'freeflight', 'champion'];
 
 export class UIManager {
   constructor({ bus, settings, progression, hangar, input }) {
@@ -33,6 +35,11 @@ export class UIManager {
     this.selectedAircraft = progression.data.activeAircraft;
     this.hangarTab = 'upgrades';
     this.settingsReturn = 'main';
+    // Free flight setup, remembered between visits within a session.
+    this.freeFlight = {
+      aircraft: progression.data.activeAircraft,
+      weather: 'clear', hour: 15.5, region: 'central',
+    };
     this._onAction = null;
 
     this.el = {
@@ -65,6 +72,12 @@ export class UIManager {
       briefingDesc: document.getElementById('briefing-desc'),
       briefingGoals: document.getElementById('briefing-goals'),
       briefingConditions: document.getElementById('briefing-conditions'),
+      ffTitle: document.getElementById('ff-title'),
+      ffSub: document.getElementById('ff-sub'),
+      ffBody: document.getElementById('ff-body'),
+      championLine: document.getElementById('champion-line'),
+      championRows: document.getElementById('champion-rows'),
+      championUnlocks: document.getElementById('champion-unlocks'),
       fade: document.getElementById('fade'),
       fps: document.getElementById('fps'),
     };
@@ -133,6 +146,14 @@ export class UIManager {
     const fly = this.screens.main.querySelector('[data-action="continue"]');
     const rec = MISSION_BY_ID[p.recommendedMission()];
     if (fly && rec) fly.textContent = `FLY — ${rec.name}`;
+    // The menu carries the title too, so the unlock is visible without opening it.
+    const ff = this.screens.main.querySelector('[data-action="freeflight"]');
+    if (ff) ff.textContent = p.isChampion ? 'FREE FLIGHT MASTER' : 'FREE FLIGHT';
+    // Beacons only appear on the strip once the player has found one, so the hunt is
+    // something you discover by flying rather than a checklist handed out at the start.
+    if (p.secretsFound > 0) {
+      this.el.pilotStrip.innerHTML += ` · ${p.secretsFound}/${SECRETS.length} BEACONS`;
+    }
   }
 
   // ------------------------------------------------------------------ map screen
@@ -353,6 +374,82 @@ export class UIManager {
     this.hangar.setAircraft(upgraded, currentPaint);
   }
 
+  // ------------------------------------------------------------- free flight
+  /**
+   * Free flight setup (spec §57, §150).
+   *
+   * Everyone gets to pick the aircraft they own, the weather and the hour. Finishing
+   * the campaign turns it into FREE FLIGHT MASTER, which is what the extra row is:
+   * every district as a starting point, including the ones the campaign never
+   * unlocked for that save.
+   */
+  renderFreeFlight() {
+    const p = this.progression;
+    const master = p.isChampion;
+    const f = this.freeFlight;
+    if (!p.data.ownedAircraft.includes(f.aircraft)) f.aircraft = p.data.activeAircraft;
+
+    const regions = master ? REGION_ORDER : REGION_ORDER.filter((id) => p.isRegionUnlocked(id));
+    if (!regions.includes(f.region)) f.region = regions[0];
+
+    this.el.ffTitle.textContent = master ? 'FREE FLIGHT MASTER' : 'FREE FLIGHT';
+    this.el.ffSub.textContent = master
+      ? 'No clock, no gates, no locked doors. The whole city, any weather, any hour.'
+      : 'No clock, no gates. Fly the city and get paid for the distance.';
+
+    const seg = (key, options, current) => `<div class="seg">${options.map(([v, label, disabled]) =>
+      `<button class="${v === current ? 'on' : ''}" ${disabled ? 'disabled' : ''}
+        data-action="ffSet" data-key="${key}" data-value="${v}">${label}</button>`).join('')}</div>`;
+
+    const hours = [[6.4, 'DAWN'], [12.5, 'DAY'], [18.4, 'DUSK'], [22, 'NIGHT']];
+    this.el.ffBody.innerHTML = `
+      <div class="setting-group"><h3>AIRCRAFT</h3>
+        <div class="setting-row"><span class="setting-label">Flown aircraft<small>Bought in the hangar</small></span>
+          <span class="setting-control">${seg('aircraft',
+            AIRCRAFT_ORDER.filter((id) => p.data.ownedAircraft.includes(id)).map((id) => [id, AIRCRAFT[id].name.split(' ')[0]]),
+            f.aircraft)}</span></div>
+      </div>
+      <div class="setting-group"><h3>CONDITIONS</h3>
+        <div class="setting-row"><span class="setting-label">Weather</span>
+          <span class="setting-control">${seg('weather',
+            ['clear', 'cloudy', 'fog', 'rain', 'storm'].map((id) => [id, weatherLabel(id)]), f.weather)}</span></div>
+        <div class="setting-row"><span class="setting-label">Time of day</span>
+          <span class="setting-control">${seg('hour', hours, f.hour)}</span></div>
+      </div>
+      <div class="setting-group"><h3>STARTING POINT</h3>
+        <div class="setting-row"><span class="setting-label">District${master ? '' : '<small>Locked districts open once you are champion</small>'}</span>
+          <span class="setting-control">${seg('region', regions.map((id) => [id, REGIONS[id].short]), f.region)}</span></div>
+      </div>`;
+  }
+
+  /** Reads one control on the free flight screen. Numbers stay numbers. */
+  setFreeFlight(key, value) {
+    this.freeFlight[key] = key === 'hour' ? Number(value) : value;
+    this.renderFreeFlight();
+  }
+
+  // --------------------------------------------------------------- celebration
+  /** Shown once, when the championship is won (spec §150). */
+  renderChampion({ stats, totalStars, maxStars, rating, secrets, secretsTotal }) {
+    this.el.championLine.textContent =
+      'The championship is yours. Skyline City has nothing left to throw at you — so go and fly it for its own sake.';
+    const rows = [
+      ['STARS', `${totalStars} / ${maxStars}`],
+      ['PILOT RATING', rating],
+      ['MISSIONS COMPLETED', formatNumber(stats.missionsCompleted)],
+      ['PERFECT RUNS', formatNumber(stats.perfectRuns)],
+      ['DISTANCE FLOWN', `${(stats.distance / 1000).toFixed(1)} km`],
+      ['BEACONS FOUND', `${secrets} / ${secretsTotal}`],
+    ];
+    this.el.championRows.innerHTML = rows.map(([k, v]) =>
+      `<div class="rr"><span class="rr-k">${k}</span><span>${v}</span></div>`).join('');
+    this.el.championUnlocks.innerHTML = [
+      'CHAMPION LIVERY UNLOCKED',
+      'FREE FLIGHT MASTER UNLOCKED — EVERY DISTRICT, ANY WEATHER, ANY HOUR',
+      secrets < secretsTotal ? `${secretsTotal - secrets} BEACONS STILL HIDDEN OUT THERE` : 'EVERY BEACON FOUND',
+    ].map((t) => `<div class="unlock-line">${t}</div>`).join('');
+  }
+
   // ----------------------------------------------------------------- statistics
   renderStats() {
     const s = this.progression.data.stats;
@@ -376,11 +473,25 @@ export class UIManager {
       ['CRASHES', formatNumber(s.crashes)],
       ['TOP SPEED', `${Math.round(s.topSpeed * 3.6)} km/h`],
       ['AIRCRAFT OWNED', `${p.data.ownedAircraft.length} / ${AIRCRAFT_ORDER.length}`],
+      ['BEACONS FOUND', `${p.secretsFound} / ${SECRETS.length}`],
     ];
+    // The hint list is the whole map for the beacon hunt: no minimap markers, no
+    // waypoints. Found ones are struck through so the list doubles as a record.
+    const beacons = SECRETS.map((b) => {
+      const got = p.data.secrets.includes(b.id);
+      return `<li class="beacon-row${got ? ' got' : ''}">
+        <span class="beacon-name">${got ? b.name : '????????'}</span>
+        <span class="beacon-hint">${b.hint}</span></li>`;
+    }).join('');
     const records = MISSIONS.filter((m) => this.progression.data.records[m.id]);
     this.el.statsBody.innerHTML = `
       <div class="stat-grid">${tiles.map(([k, v]) => `
         <div class="stat-tile"><div class="st-label">${k}</div><div class="st-value">${v}</div></div>`).join('')}</div>
+      <div class="beacon-block">
+        <h3>HIDDEN BEACONS — ${p.secretsFound} / ${SECRETS.length}</h3>
+        <p class="screen-sub">Twelve of them, out in the city. Fly close and they are yours.</p>
+        <ul class="beacon-list">${beacons}</ul>
+      </div>
       ${records.length ? `<table class="records-table">
         <thead><tr><th>MISSION</th><th>★</th><th>BEST TIME</th><th>BEST SCORE</th><th>BEST COMBO</th><th>TOP SPEED</th></tr></thead>
         <tbody>${records.map((m) => {

@@ -2,6 +2,7 @@ import { MISSIONS, MISSION_BY_ID, TOTAL_STARS } from '../data/missions.js';
 import { AIRCRAFT, AIRCRAFT_ORDER, getAircraft } from '../data/aircraft.js';
 import { REGIONS, REGION_ORDER } from '../data/regions.js';
 import { PAINTS, UPGRADE_TREE, applyUpgrades, upgradeCost } from '../data/upgrades.js';
+import { SECRETS, SECRET_BY_ID, SECRET_REWARD } from '../data/secrets.js';
 
 /**
  * Progression, economy and unlocks (spec §48-56, §79, §97).
@@ -298,6 +299,57 @@ export class Progression {
     };
     this.bus.emit('progress:result', payload);
     return payload;
+  }
+
+  // ------------------------------------------------------------------- secrets
+  /**
+   * Banks a hidden beacon (spec §151). Pays on the spot rather than at the end of a
+   * run, because most of them are found in free flight where there is no end of a run,
+   * and the whole set earns the livery nothing else sells.
+   */
+  findSecret(id) {
+    if (!SECRET_BY_ID[id] || this.data.secrets.includes(id)) return null;
+    this.data.secrets.push(id);
+    this.data.credits += SECRET_REWARD.credits;
+    this.data.xp += SECRET_REWARD.xp;
+    while (this.data.xp >= xpForLevel(this.data.level + 1)) this.data.level++;
+
+    const complete = this.data.secrets.length >= SECRETS.length;
+    const paint = complete && this.unlockPaint('beacon') ? 'beacon' : null;
+    this.save.markDirty();
+
+    const payload = {
+      id, name: SECRET_BY_ID[id].name,
+      found: this.data.secrets.length, total: SECRETS.length,
+      credits: SECRET_REWARD.credits, xp: SECRET_REWARD.xp,
+      complete, paint,
+    };
+    this.bus.emit('secret:found', payload);
+    return payload;
+  }
+
+  get secretsFound() {
+    return this.data.secrets.length;
+  }
+
+  /** The beacons still out there, for the hint list in the statistics screen. */
+  secretsRemaining() {
+    return SECRETS.filter((s) => !this.data.secrets.includes(s.id));
+  }
+
+  /**
+   * True once, the first time it is asked after the final mission is won: the campaign
+   * celebration and the free flight unlock both hang off it (spec §150).
+   */
+  claimChampionCelebration() {
+    if (!this.data.championship.completed || this.data.championship.celebrated) return false;
+    this.data.championship.celebrated = true;
+    this.save.markDirty();
+    return true;
+  }
+
+  get isChampion() {
+    return !!this.data.championship.completed;
   }
 
   /** Free flight still pays, at a much lower rate, so exploring is not wasted (§49). */

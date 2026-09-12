@@ -20,6 +20,7 @@ import { chromium } from 'playwright';
 // The mission catalogue is pure data with no browser dependencies, so the test can
 // read it directly rather than trying to discover mission ids through the DOM.
 import { MISSIONS } from '../src/data/missions.js';
+import { SECRETS } from '../src/data/secrets.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DIST = path.join(ROOT, 'dist');
@@ -580,6 +581,95 @@ async function main() {
   await page.evaluate(() => window.__skyline.world.setConditions({ weather: 'storm', hour: 21.5, instant: true }));
   await sleep(1200);
   await page.screenshot({ path: path.join(SHOTS, '07-night-storm.png') });
+
+  // ------------------------------------------------------------- hidden beacons
+  // Flown to rather than teleported onto where it matters: the aircraft is placed at
+  // the beacon and the proximity test has to fire on its own in the next frames.
+  const beacon = await evaluate(page, async (b) => {
+    const g = window.__skyline;
+    const before = { found: g.progression.secretsFound, credits: g.progression.data.credits };
+    g.flight.position.set(b.x, b.y, b.z);
+    await new Promise((r) => setTimeout(r, 900));
+    return {
+      before, found: g.progression.secretsFound, credits: g.progression.data.credits,
+      saved: g.progression.data.secrets.includes(b.id),
+      drawn: !!g.scene.getObjectByName('secretBeacons'),
+    };
+  }, SECRETS[0]);
+  check('a hidden beacon can be found and pays out',
+    beacon.drawn && beacon.found === beacon.before.found + 1 && beacon.saved
+      && beacon.credits > beacon.before.credits, JSON.stringify(beacon));
+
+  const beaconStats = await evaluate(page, () => {
+    const g = window.__skyline;
+    g._onUiAction('tomenu');
+    g._onUiAction('stats');
+    return {
+      rows: document.querySelectorAll('.beacon-row').length,
+      found: document.querySelectorAll('.beacon-row.got').length,
+      hinted: [...document.querySelectorAll('.beacon-hint')].every((e) => e.textContent.length > 12),
+    };
+  });
+  check('the statistics screen lists every beacon with a hint',
+    beaconStats.rows === SECRETS.length && beaconStats.found >= 1 && beaconStats.hinted,
+    JSON.stringify(beaconStats));
+
+  // ------------------------------------------------------- free flight setup
+  const ffScreen = await evaluate(page, () => {
+    const g = window.__skyline;
+    g._onUiAction('tomenu');
+    g._onUiAction('freeflight');
+    g._onUiAction('ffSet', { key: 'weather', value: 'storm' });
+    g._onUiAction('ffSet', { key: 'hour', value: '22' });
+    return {
+      state: g.state,
+      title: document.getElementById('ff-title').textContent,
+      weather: g.ui.freeFlight.weather,
+      hour: g.ui.freeFlight.hour,
+      districts: document.querySelectorAll('[data-action="ffSet"][data-key="region"]').length,
+    };
+  });
+  check('free flight can be set up before launching',
+    ffScreen.state === 'freeflight' && ffScreen.weather === 'storm' && ffScreen.hour === 22
+      && ffScreen.districts >= 1, JSON.stringify(ffScreen));
+
+  await evaluate(page, () => window.__skyline._onUiAction('ffLaunch'));
+  await waitFor(page, () => window.__skyline.state === 'playing', null, 60000);
+  const ffLaunched = await evaluate(page, () => ({
+    weather: window.__skyline.world.weather.id,
+    freeFlight: window.__skyline.missions.freeFlight,
+    night: Number(window.__skyline.world.night.toFixed(2)),
+  }));
+  check('the chosen conditions reach the flight',
+    ffLaunched.freeFlight && ffLaunched.weather === 'storm' && ffLaunched.night > 0.5,
+    JSON.stringify(ffLaunched));
+
+  // ------------------------------------------------------------- the campaign ends
+  const champion = await evaluate(page, () => {
+    const g = window.__skyline;
+    g.progression.data.championship.completed = true;
+    g.progression.data.championship.celebrated = false;
+    g.state = 'results';
+    g._onUiAction('tomenu');           // leaving the results goes through the celebration
+    const shown = {
+      state: g.state,
+      visible: document.getElementById('screen-champion').classList.contains('active'),
+      rows: document.querySelectorAll('#champion-rows .rr').length,
+      unlocks: document.querySelectorAll('#champion-unlocks .unlock-line').length,
+      celebrated: g.progression.data.championship.celebrated,
+    };
+    g._onUiAction('freeflight');
+    shown.masterTitle = document.getElementById('ff-title').textContent;
+    shown.masterDistricts = document.querySelectorAll('[data-action="ffSet"][data-key="region"]').length;
+    g._onUiAction('tomenu');
+    return shown;
+  });
+  check('winning the championship shows the celebration once',
+    champion.visible && champion.state === 'champion' && champion.rows >= 5
+      && champion.unlocks >= 3 && champion.celebrated, JSON.stringify(champion));
+  check('being champion unlocks free flight master',
+    champion.masterTitle === 'FREE FLIGHT MASTER' && champion.masterDistricts === 9,
+    JSON.stringify({ title: champion.masterTitle, districts: champion.masterDistricts }));
 
   // ---------------------------------------------------------------- takeoff
   console.log('\n  testing takeoff from the runway…');

@@ -394,7 +394,36 @@ html, body {
   background: var(--scrim); padding: 2px 8px; pointer-events: none;
 }
 
+/* ---- hidden beacons: the hint list in the statistics screen ---- */
+.beacon-block { margin-top: 26px; }
+.beacon-block h3 { font-size: 12px; letter-spacing: 0.2em; color: var(--cyan); margin: 0 0 4px; font-weight: 600; }
+.beacon-list { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 6px; grid-template-columns: 1fr 1fr; }
+.beacon-row {
+  display: flex; gap: 10px; align-items: baseline; font-size: 11px;
+  padding: 6px 9px; background: rgba(10, 22, 38, 0.55); border-left: 2px solid var(--line);
+}
+.beacon-row.got { border-left-color: var(--cyan); }
+.beacon-name { font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; color: var(--text-dim); flex: 0 0 118px; }
+.beacon-row.got .beacon-name { color: var(--cyan); }
+.beacon-hint { color: var(--text-dim); }
+.beacon-row.got .beacon-hint { color: var(--text); }
+
+/* ---- free flight setup ---- */
+.ff-wrap { display: flex; flex-direction: column; align-items: stretch; }
+.ff-wrap .results-actions { margin-top: 18px; }
+
+/* ---- campaign celebration ---- */
+.champion-panel {
+  width: min(560px, 92vw); padding: 34px 38px; text-align: center;
+  background: var(--panel); border: 1px solid var(--gold, #c9a227);
+  box-shadow: 0 0 60px rgba(201, 162, 39, 0.18);
+}
+.champion-panel h2 { font-size: 30px; letter-spacing: 0.16em; margin: 6px 0 10px; color: #e8c65a; }
+.champion-crest { font-size: 44px; color: #e8c65a; line-height: 1; }
+.champion-panel .results-rows { margin-top: 18px; text-align: left; }
+
 @media (max-width: 900px) {
+  .beacon-list { grid-template-columns: 1fr; }
   .map-body, .hangar-body { flex-direction: column; height: auto; max-height: 74vh; overflow-y: auto; }
   .mission-list-wrap { flex-direction: column; }
   .mission-detail { border-left: none; padding-left: 0; border-top: 1px solid var(--line); padding-top: 12px; }

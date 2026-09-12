@@ -35,7 +35,8 @@ export function createEmptySave() {
       perfectRuns: 0,
     },
     seenBriefings: {},
-    championship: { unlocked: false, completed: false, bestTotal: 0 },
+    secrets: [],         // ids of the hidden beacons already collected
+    championship: { unlocked: false, completed: false, bestTotal: 0, celebrated: false },
   };
 }
 
@@ -51,6 +52,8 @@ function migrate(save) {
   for (const k of ['ownedAircraft', 'unlockedPaints', 'unlockedRegions']) {
     out[k] = Array.isArray(save[k]) && save[k].length ? save[k] : empty[k];
   }
+  // Unlike the lists above, empty is the normal state here, so it is kept as it is.
+  out.secrets = Array.isArray(save.secrets) ? save.secrets.filter((id) => typeof id === 'string') : [];
   if (!out.ownedAircraft.includes('skylark')) out.ownedAircraft.unshift('skylark');
   if (!out.ownedAircraft.includes(out.activeAircraft)) out.activeAircraft = out.ownedAircraft[0];
   out.credits = Number.isFinite(out.credits) ? Math.max(0, out.credits) : 0;

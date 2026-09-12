@@ -7,6 +7,7 @@ import { Input } from './core/Input.js';
 import { clamp01, damp } from './core/MathUtils.js';
 
 import { WorldManager } from './world/WorldManager.js';
+import { SecretBeacons } from './world/SecretBeacons.js';
 import { FlightModel } from './flight/FlightModel.js';
 import { TurboSystem } from './flight/TurboSystem.js';
 import { DamageSystem } from './flight/DamageSystem.js';
@@ -27,6 +28,8 @@ import { HangarScene } from './ui/HangarScene.js';
 import { UIManager } from './ui/UIManager.js';
 
 import { MISSION_BY_ID } from './data/missions.js';
+import { REGIONS } from './data/regions.js';
+import { SECRETS } from './data/secrets.js';
 
 /**
  * SKYLINE FLIGHT — application shell.
@@ -36,6 +39,9 @@ import { MISSION_BY_ID } from './data/missions.js';
  * wiring between them (spec §90-91: no god script). The order of the update calls is
  * the one place where that wiring is load-bearing, so it is spelled out in `_tick`.
  */
+/** Particle tint for a found beacon; a Color because that is what the pool expects. */
+const SECRET_TINT = new THREE.Color(0x63ecff);
+
 const STATE = {
   LOADING: 'loading',
   MENU: 'menu',
@@ -48,6 +54,8 @@ const STATE = {
   PAUSED: 'paused',
   OUTRO: 'outro',
   RESULTS: 'results',
+  FREEFLIGHT: 'freeflight',
+  CHAMPION: 'champion',
 };
 
 class Game {
@@ -222,6 +230,11 @@ class Game {
       scene: this.scene,
     });
 
+    // Hidden beacons: world furniture, but they pay into progression, so they are
+    // built here and seeded from the save rather than owned by the world (§151).
+    this.secrets = new SecretBeacons({ scene: this.scene, bus: this.bus });
+    this.secrets.setFound(this.progression.data.secrets);
+
     // Presentation.
     this.particles = new ParticleSystem({ scene: this.scene, settings: this.settings });
     this.contrails = new ContrailSystem({ scene: this.scene });
@@ -278,6 +291,21 @@ class Game {
       this.cameraController.startCinematic(this.flight.position, { duration: 2.6, radius: 34, height: 12, spin: 0.9 });
     });
     this.bus.on('checkpoint:passed', () => this.input.vibrate(0.15, 70));
+    this.bus.on('secret:reached', (e) => {
+      // The beacon system only reports contact. Banking it, paying for it and deciding
+      // whether that was the last one is progression's business.
+      const payload = this.progression.findSecret(e.id);
+      if (!payload) return;
+      this.particles.burst('spark', e.position, 26, 16, { tint: SECRET_TINT });
+      this.audio?.blip(880, 0.16, 'triangle', 0.22);
+      this.audio?.blip(1320, 0.22, 'sine', 0.18);
+      this.input.vibrate(0.3, 160);
+      this.hud.toast(`${payload.name} FOUND — ${payload.found}/${payload.total}`, 'good', 3);
+      if (payload.complete) {
+        this.audio?.fanfare(true);
+        this.hud.toast('EVERY BEACON FOUND — BEACON LIVERY UNLOCKED', 'good', 5);
+      }
+    });
   }
 
   // ------------------------------------------------------------- state changes
@@ -318,12 +346,22 @@ class Game {
     await this.ui.fade('in', 260);
   }
 
-  async _startFreeFlight() {
+  async _startFreeFlight(setup = null) {
     await this.ui.fade('out', 260);
+    if (setup?.aircraft && setup.aircraft !== this.progression.data.activeAircraft) {
+      this.progression.selectAircraft(setup.aircraft);
+    }
     this._rebuildAircraftModel();
+    // A district start puts the player over its centre at a height that clears the
+    // tallest thing in it; the default is the skyline view the menu camera orbits.
+    const region = setup?.region ? REGIONS[setup.region] : null;
+    const spawn = region
+      ? { x: region.cx + 400, y: 620, z: region.cz + 900, heading: Math.PI }
+      : { x: 600, y: 520, z: 1600, heading: Math.PI * 0.85 };
     this.missions.startFreeFlight({
-      weather: 'clear', hour: 15.5,
-      spawn: { x: 600, y: 520, z: 1600, heading: Math.PI * 0.85 },
+      weather: setup?.weather ?? 'clear',
+      hour: setup?.hour ?? 15.5,
+      spawn,
       timeScale: 60,
     });
     this.contrails.reset(this.flight.position);
@@ -381,6 +419,30 @@ class Game {
     document.getElementById('cinematic-bars')?.classList.remove('hidden');
   }
 
+  /**
+   * The one-off campaign celebration (spec §150). It replaces the results screen for
+   * the run that wins the championship, because a results screen is what every other
+   * mission ends with and this one should not feel like every other mission.
+   */
+  _showChampion() {
+    const p = this.progression;
+    document.getElementById('cinematic-bars')?.classList.add('hidden');
+    this.state = STATE.CHAMPION;
+    this.hud.hide();
+    this.ui.renderChampion({
+      stats: p.data.stats,
+      totalStars: p.totalStars,
+      maxStars: p.maxStars,
+      rating: p.rating.name,
+      secrets: p.secretsFound,
+      secretsTotal: SECRETS.length,
+    });
+    this.ui.show('champion');
+    this.cameraController.stopCinematic();
+    this.audio?.fanfare(true);
+    this.particles.burst('spark', this.flight.position, 48, 26, { tint: SECRET_TINT });
+  }
+
   _showResults() {
     const { result, payload } = this._pendingResult ?? {};
     if (!result) return this._enterMenu();
@@ -406,7 +468,13 @@ class Game {
         this._enterScreen(STATE.HANGAR, 'hangar', () => this.ui.renderHangar());
         break;
       case 'freeflight':
-        this._startFreeFlight();
+        this._enterScreen(STATE.FREEFLIGHT, 'freeflight', () => this.ui.renderFreeFlight());
+        break;
+      case 'ffSet':
+        this.ui.setFreeFlight(data.key, data.value);
+        break;
+      case 'ffLaunch':
+        this._startFreeFlight(this.ui.freeFlight);
         break;
       case 'stats':
         this._enterScreen(STATE.STATS, 'stats', () => this.ui.renderStats());
@@ -491,14 +559,20 @@ class Game {
         this.particles.clear();
         break;
       case 'quit':
-      case 'tomenu':
         this._enterMenu();
         break;
       case 'retry':
         this._startMission(this._pendingResult?.result?.missionId ?? this.progression.recommendedMission());
         break;
-      case 'next': {
-        const id = data.mission;
+      // Leaving the results of the run that won the championship goes through the
+      // celebration once (spec §150). Retry is left alone: it is not leaving.
+      case 'next':
+      case 'tomenu': {
+        if (this.state === STATE.RESULTS && this.progression.claimChampionCelebration()) {
+          this._showChampion();
+          break;
+        }
+        const id = action === 'next' ? data.mission : null;
         if (id) this._startMission(id);
         else this._enterMenu();
         break;
@@ -597,6 +671,8 @@ class Game {
 
     const telemetry = this.flight.telemetry();
     this.world.update(dt, this.flight.position);
+    // Beacons turn wherever you are, but only a flying aircraft can collect one.
+    this.secrets.update(dt, simulating ? this.flight.position : null);
 
     if (this.state !== STATE.PAUSED) {
       if (simulating) {

@@ -9,6 +9,7 @@ import { AIRCRAFT, AIRCRAFT_ORDER } from '../src/data/aircraft.js';
 import { UPGRADE_TREE, UPGRADE_ORDER, applyUpgrades, PAINTS, upgradeCost } from '../src/data/upgrades.js';
 import { REGIONS, REGION_ORDER, LANDMARKS, RUNWAY } from '../src/data/regions.js';
 import { WEATHER } from '../src/data/weather.js';
+import { SECRETS, SECRET_BY_ID, SECRET_RADIUS, SECRET_REWARD } from '../src/data/secrets.js';
 import { collisionHeight, isOnRunway } from '../src/world/Terrain.js';
 import { generateCity } from '../src/world/CityGenerator.js';
 import { createLandmarks } from '../src/world/Landmarks.js';
@@ -196,6 +197,46 @@ test('every region has at least one mission and every district is represented', 
   for (const id of REGION_ORDER) {
     assert.ok(used.has(id), `no mission set in ${id}`);
   }
+});
+
+test('every hidden beacon is reachable', () => {
+  // The failure this guards against is a beacon authored inside a landmark or a
+  // hillside: visible, glowing, and impossible to collect without crashing.
+  const { grid } = generateCity({ seed: 20260912 });
+  createLandmarks(grid);
+  const problems = [];
+  for (const s of SECRETS) {
+    const ground = collisionHeight(s.x, s.z);
+    if (s.y - ground < 20) problems.push(`${s.id}: ${(s.y - ground).toFixed(0)} m above ground`);
+    if (grid.sample({ x: s.x, y: s.y, z: s.z }, SECRET_RADIUS * 0.5)) problems.push(`${s.id}: inside geometry`);
+  }
+  assert.equal(problems.length, 0, problems.join('; '));
+});
+
+test('hidden beacons are distinct, named, hinted and spread out', () => {
+  const ids = SECRETS.map((s) => s.id);
+  assert.equal(new Set(ids).size, ids.length, 'duplicate beacon id');
+  assert.equal(Object.keys(SECRET_BY_ID).length, SECRETS.length, 'lookup out of step with the list');
+  for (const s of SECRETS) {
+    assert.ok(s.name?.length > 3, `${s.id}: missing name`);
+    assert.ok(s.hint?.length > 12, `${s.id}: hint too thin to be a hint`);
+    assert.ok(REGIONS[s.region], `${s.id}: unknown region "${s.region}"`);
+  }
+  // Clustered beacons would make one flight collect several by accident.
+  for (let i = 0; i < SECRETS.length; i++) {
+    for (let j = i + 1; j < SECRETS.length; j++) {
+      const a = SECRETS[i]; const b = SECRETS[j];
+      const d = Math.hypot(a.x - b.x, a.z - b.z);
+      assert.ok(d > SECRET_RADIUS * 6, `${a.id} and ${b.id} are ${d.toFixed(0)} m apart`);
+    }
+  }
+  assert.ok(SECRET_REWARD.credits > 0 && SECRET_REWARD.xp > 0, 'beacons must pay something');
+  assert.ok(PAINTS.beacon?.reward, 'the full set has nothing to award');
+});
+
+test('beacons are spread across the map rather than over one district', () => {
+  const regions = new Set(SECRETS.map((s) => s.region));
+  assert.ok(regions.size >= 6, `beacons only cover ${regions.size} districts`);
 });
 
 test('landmarks sit on or above their ground', () => {

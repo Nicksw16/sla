@@ -105,6 +105,7 @@ export const PAINTS = {
   carbon:   { name: 'CARBON',   body: 0x26282c, trim: 0x8a8f96, cost: 4500 },
   aurora:   { name: 'AURORA',   body: 0x5a3fb0, trim: 0x46e08a, cost: 6000 },
   gold:     { name: 'CHAMPION', body: 0xc9a227, trim: 0x3a2c08, cost: 0, reward: true },
+  beacon:   { name: 'BEACON',   body: 0x0f3244, trim: 0x63ecff, cost: 0, reward: true },
 };
 
 export const PAINT_ORDER = Object.keys(PAINTS);

@@ -109,6 +109,19 @@ air races and the championship final. Gates shrink from 52 m while learning to 2
 end. Star thresholds gate the next district, so progress comes from flying well rather than
 from playing long.
 
+Finishing the championship ends the campaign properly: a celebration screen, the
+champion livery, and FREE FLIGHT MASTER — free flight with every district open as a
+starting point, any weather and any hour, in any aircraft you own.
+
+## Hidden beacons
+
+Twelve of them, out in the city, in places you have to fly deliberately: under the
+bridge deck, down in the stadium bowl, inside Ridge Pass, out over open water. Each pays
+credits and experience, and the full set earns a livery that is not for sale. There are
+no markers on the minimap — the statistics screen lists a hint for each one and nothing
+else. They can be collected in any flight, mission or free flight, and the save
+remembers them.
+
 The rival, Vanya Kestrel, flies a real `FlightModel` with a real aircraft from the same
 catalogue the player buys from. It cannot cheat because there is no mechanism available to
 it that the player does not also have: no secret top speed, no free energy in corners, and
@@ -122,7 +135,8 @@ src/
   data/        aircraft, missions, regions, upgrades, weather  (data, not code)
   flight/      flight model, turbo, damage, trick detection, aircraft factory
   camera/      chase, far and cockpit camera with speed-linked field of view
-  world/       terrain, city generator, landmarks, sky, weather, traffic, time of day
+  world/       terrain, city generator, landmarks, sky, weather, traffic, time of day,
+               hidden beacons
   mission/     checkpoints, score and combo, mission state machine, rival AI
   progression/ economy, XP, ratings, unlocks
   fx/          pooled particles, contrails, effects director
@@ -173,14 +187,18 @@ speed, and it is the throttle, not the stick, that gets it flying again.
 `tests/content.test.js` validates authored data against the generated world — it is what
 caught three checkpoints buried inside the mountain, three more inside buildings and
 landmarks, the city generator placing buildings across the runway, and the balance bug
-where a fully upgraded Talon out-ran a stock Meridian.
+where a fully upgraded Talon out-ran a stock Meridian. It does the same for the hidden
+beacons: of the twelve, five were first authored inside a landmark and one five metres
+off the ground.
 
 `tests/smoke.test.js` serves the production build, drives it in headless Chromium, and
 flies the first mission using real key events. It checks the city generates, the scene
 renders, every control axis does what it claims, checkpoints register, a mission completes,
 stars and credits are paid, progress survives a reload, a corrupt save recovers from its
 backup, upgrades reach the flown aircraft, collisions cause damage, every weather state
-renders, and the aircraft can take off from the runway.
+renders, the beacons can be found and pay out, free flight can be set up and launched
+with the chosen weather, the championship celebration appears once, and the aircraft can
+take off from the runway.
 
 ## Known limits
 
@@ -196,9 +214,6 @@ renders, and the aircraft can take off from the runway.
   sequence, and supporting alternatives means changing that core, which was not worth
   destabilising late. The nearest thing that exists is authored rather than structural: the
   gap under Northgate Bridge is a genuine short cut you can choose to take.
-- **No collectible tokens scattered across the map.** The champion livery is awarded for
-  finishing the campaign instead, so nothing in the hangar advertises an unlock with no
-  path to it.
 - **No daily challenges**, and the championship is three escalating missions rather than a
   separate multi-stage mode with its own standings.
 - **The rival races on its own clock.** It flies the same route under the same physics and
