@@ -180,8 +180,9 @@ renders, and the aircraft can take off from the runway.
   route and its pace scales with skill, but it does not thread every ring.
 - **No replay or photo mode.** Both are listed as secondary in the specification and were
   cut in favour of the core loop.
-- **Collectible tokens** are wired through the save file and the champion livery's unlock
-  requirement, but are not yet scattered across the map.
+- **No collectible tokens scattered across the map.** The champion livery is awarded for
+  finishing the campaign instead, so nothing in the hangar advertises an unlock with no
+  path to it.
 - **No daily challenges**, and the championship is three escalating missions rather than a
   separate multi-stage mode with its own standings.
 - **The rival races on its own clock.** It flies the same route under the same physics and

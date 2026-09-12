@@ -253,7 +253,7 @@ export class UIManager {
   // ---------------------------------------------------------------------- hangar
   renderHangar() {
     const p = this.progression;
-    this.el.hangarCredits.innerHTML = `<b>${formatNumber(p.credits)}</b> CR · ${p.totalStars} ★ · ${p.tokenCount} TOKENS`;
+    this.el.hangarCredits.innerHTML = `<b>${formatNumber(p.credits)}</b> CR · ${p.totalStars} ★ · ${p.rating.name}`;
 
     this.el.hangarList.innerHTML = '';
     for (const id of AIRCRAFT_ORDER) {
@@ -321,10 +321,13 @@ export class UIManager {
       const body = `#${paint.body.toString(16).padStart(6, '0')}`;
       const trim = `#${paint.trim.toString(16).padStart(6, '0')}`;
       const locked = !owned;
-      const label = owned ? paint.name : (paint.requiresTokens ? `${paint.requiresTokens} TOKENS` : `${formatNumber(paint.cost)} CR`);
+      const label = owned ? paint.name : paint.reward ? 'REWARD' : `${formatNumber(paint.cost)} CR`;
+      // A reward livery has no purchase action at all, so it never offers a price
+      // the player cannot pay.
+      const action = owned ? 'applyPaint' : paint.reward ? 'noop' : 'buyPaint';
       return `<div class="paint-swatch${pid === currentPaint ? ' selected' : ''}${locked ? ' locked' : ''}"
         style="background:linear-gradient(135deg,${body} 60%,${trim} 60%)"
-        data-action="${owned ? 'applyPaint' : 'buyPaint'}" data-paint="${pid}">
+        data-action="${action}" data-paint="${pid}">
         <span class="paint-name">${label}</span></div>`;
     }).join('')}</div>`;
 

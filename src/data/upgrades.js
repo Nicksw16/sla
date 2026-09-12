@@ -90,6 +90,11 @@ export function applyUpgrades(baseSpec, levels = {}) {
   return spec;
 }
 
+/**
+ * Liveries. `reward: true` means it cannot be bought at any price — it is awarded by a
+ * mission (see the SKYLINE MASTER reward). The hangar labels those accordingly rather
+ * than showing a price the player can never pay.
+ */
 export const PAINTS = {
   factory:  { name: 'FACTORY',  body: 0xdde6f0, trim: 0x2b3a4c, cost: 0 },
   ember:    { name: 'EMBER',    body: 0xd9432b, trim: 0x2b1a14, cost: 0 },
@@ -99,7 +104,7 @@ export const PAINTS = {
   sunburst: { name: 'SUNBURST', body: 0xf2a316, trim: 0x54290a, cost: 3500 },
   carbon:   { name: 'CARBON',   body: 0x26282c, trim: 0x8a8f96, cost: 4500 },
   aurora:   { name: 'AURORA',   body: 0x5a3fb0, trim: 0x46e08a, cost: 6000 },
-  gold:     { name: 'CHAMPION', body: 0xc9a227, trim: 0x3a2c08, cost: 0, requiresTokens: 12 },
+  gold:     { name: 'CHAMPION', body: 0xc9a227, trim: 0x3a2c08, cost: 0, reward: true },
 };
 
 export const PAINT_ORDER = Object.keys(PAINTS);

@@ -64,10 +64,6 @@ export class Progression {
     return xpForLevel(this.data.level + 1) - xpForLevel(this.data.level);
   }
 
-  get tokenCount() {
-    return Object.keys(this.data.tokens).length;
-  }
-
   // ----------------------------------------------------------------- unlocks
   isMissionUnlocked(id) {
     const m = MISSION_BY_ID[id];
@@ -167,7 +163,7 @@ export class Progression {
     const p = PAINTS[id];
     if (!p) return { ok: false, reason: 'unknown' };
     if (this.data.unlockedPaints.includes(id)) return { ok: false, reason: 'owned' };
-    if (p.requiresTokens && this.tokenCount < p.requiresTokens) return { ok: false, reason: 'tokens' };
+    if (p.reward) return { ok: false, reason: 'reward-only' };
     if (this.data.credits < p.cost) return { ok: false, reason: 'credits' };
     this.data.credits -= p.cost;
     this.data.unlockedPaints.push(id);

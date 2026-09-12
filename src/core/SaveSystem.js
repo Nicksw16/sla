@@ -20,7 +20,6 @@ export function createEmptySave() {
     paint: {},           // aircraftId -> paintId
     unlockedPaints: ['factory', 'ember', 'ice'],
     unlockedRegions: ['central'],
-    tokens: {},          // tokenId -> true
     stats: {
       flightTime: 0,
       distance: 0,
@@ -46,7 +45,7 @@ function migrate(save) {
   const out = { ...empty, ...save };
   out.stats = { ...empty.stats, ...(save.stats || {}) };
   out.championship = { ...empty.championship, ...(save.championship || {}) };
-  for (const k of ['stars', 'completed', 'records', 'upgrades', 'paint', 'tokens', 'seenBriefings']) {
+  for (const k of ['stars', 'completed', 'records', 'upgrades', 'paint', 'seenBriefings']) {
     out[k] = save[k] && typeof save[k] === 'object' ? save[k] : {};
   }
   for (const k of ['ownedAircraft', 'unlockedPaints', 'unlockedRegions']) {
