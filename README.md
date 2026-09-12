@@ -156,7 +156,7 @@ draw calls, with world updates at about 0.3 ms per frame.
 ## Tests
 
 ```bash
-npm run test:flight    # 24 physics assertions, plain Node, no renderer
+npm run test:flight    # 27 physics assertions, plain Node, no renderer
 npm run test:content   # 19 content assertions against the generated world
 npm run test:e2e       # headless browser run (needs a build first)
 npm test               # all of it
@@ -164,9 +164,11 @@ npm test               # all of it
 
 `tests/flight.test.js` pins the axis conventions and the handling promises: that banking
 right turns right, that full throttle trims at the catalogue top speed, that level flight
-holds altitude, that a dive beats level beats a climb, that a stall is recoverable, that
-takeoff and landing gates work, and that a long frame cannot teleport the aircraft through
-a wall.
+holds altitude, that a dive beats level beats a climb, that an aircraft stopped dead in the
+air is never pinned there, that takeoff and landing gates work, and that a long frame cannot
+teleport the aircraft through a wall. One of them documents a behaviour rather than a
+promise: at idle a heavy aircraft settles into a stable mushing descent below its stall
+speed, and it is the throttle, not the stick, that gets it flying again.
 
 `tests/content.test.js` validates authored data against the generated world — it is what
 caught three checkpoints buried inside the mountain, three more inside buildings and
