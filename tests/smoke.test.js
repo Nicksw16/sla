@@ -64,6 +64,27 @@ function serve(dir) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
+ * Bounds any interaction with the page.
+ *
+ * Nothing that talks to a browser tab here can be trusted to return: page.evaluate has
+ * no timeout of its own, and key events queue behind the same blocked main thread. On a
+ * page rendering at two frames a second either can wait indefinitely, which turns a
+ * failing run into a hanging one - no output, no failure, no end. Every call goes
+ * through this.
+ */
+function bounded(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after ${ms} ms`)), ms)),
+  ]);
+}
+
+const pressKey = (page, key) => bounded(page.keyboard.press(key), 20000, `press ${key}`);
+const holdKey = (page, key) => bounded(page.keyboard.down(key), 20000, `hold ${key}`);
+const releaseKey = (page, key) => bounded(page.keyboard.up(key), 20000, `release ${key}`);
+const evaluate = (page, fn, arg, ms = 30000) => bounded(page.evaluate(fn, arg), ms, 'page.evaluate');
+
+/**
  * Waits for a predicate instead of sleeping a guessed number of milliseconds.
  * Under software rendering a single frame can take longer than any sleep worth
  * writing, so "press the key, sleep 250 ms, read the state" tests the renderer.
@@ -80,7 +101,26 @@ async function waitFor(page, fn, arg = null, timeout = 8000) {
 /** Clicks within the active screen. The same data-action appears on several screens. */
 const clickActive = (page, action) => page.click(`.screen.active [data-action="${action}"]`);
 
+/**
+ * Whole-run deadline.
+ *
+ * The individual guards cover the calls that are known to block, but there are enough
+ * interactions with the page that the only way to promise this run ends is to promise
+ * it directly. A run that hangs silently is worse than one that fails: it tells you
+ * nothing, and it holds everything behind it.
+ */
+function armDeadline(minutes) {
+  const timer = setTimeout(() => {
+    console.error(`\nrun exceeded its ${minutes} minute deadline`);
+    console.error(`${passed} checks passed, ${failed} failed before it stalled\n`);
+    process.exit(1);
+  }, minutes * 60000);
+  timer.unref?.();
+  return timer;
+}
+
 async function main() {
+  const deadline = armDeadline(Number(process.env.DEADLINE_MINUTES ?? 45));
   if (!existsSync(DIST)) {
     console.error('dist/ not found — run `npm run build` first.');
     process.exit(1);
@@ -240,11 +280,11 @@ async function main() {
   // attitude. Under software rendering the frame rate is low enough that a fixed
   // attitude threshold is a measure of the renderer, not of the controls.
   const axisCheck = async (name, key, read, expectSign, ms = 1400) => {
-    const before = await page.evaluate(read);
-    await page.keyboard.down(key);
+    const before = await evaluate(page, read);
+    await holdKey(page, key);
     await sleep(ms);
-    const during = await page.evaluate(read);
-    await page.keyboard.up(key);
+    const during = await evaluate(page, read);
+    await releaseKey(page, key);
     await sleep(400);
     const delta = (during.value - before.value) * expectSign;
     const deflected = during.control * expectSign;
@@ -264,27 +304,27 @@ async function main() {
     () => ({ value: window.__skyline.flight.heading, control: window.__skyline.flight.control.yaw }), -1);
 
   // Level the wings again before flying the route.
-  await page.keyboard.down('z');
+  await holdKey(page, 'z');
   await sleep(1500);
-  await page.keyboard.up('z');
+  await releaseKey(page, 'z');
   const levelled = await page.evaluate(() => Math.abs(window.__skyline.flight.bank));
   check('Z levels the wings', levelled < 0.3, `bank ${levelled.toFixed(2)} rad`);
 
-  const turbo0 = await page.evaluate(() => window.__skyline.turbo.energy);
-  await page.keyboard.down('Shift');
+  const turbo0 = await evaluate(page, () => window.__skyline.turbo.energy);
+  await holdKey(page, 'Shift');
   await sleep(900);
-  await page.keyboard.up('Shift');
+  await releaseKey(page, 'Shift');
   const turboState = await page.evaluate(() => ({ e: window.__skyline.turbo.energy, used: window.__skyline.turbo.totalUsed }));
   check('Shift burns turbo', turboState.e < turbo0 && turboState.used > 0,
     `${turbo0.toFixed(0)} -> ${turboState.e.toFixed(0)}`);
 
-  await page.keyboard.press('c');
+  await pressKey(page, 'c');
   const cycled = await waitFor(page, () => window.__skyline.cameraController.mode !== 'chase');
   const camMode = await page.evaluate(() => window.__skyline.cameraController.mode);
   check('C cycles the camera', cycled, `mode=${camMode}`);
   // Back round to the chase camera for the flying section.
   for (let i = 0; i < 3 && (await page.evaluate(() => window.__skyline.cameraController.mode)) !== 'chase'; i++) {
-    await page.keyboard.press('c');
+    await pressKey(page, 'c');
     await waitFor(page, () => true, null, 600);
     await sleep(400);
   }
@@ -448,9 +488,9 @@ async function main() {
   // ---------------------------------------------------------------- free flight
   await page.evaluate(() => window.__skyline._startFreeFlight());
   await page.waitForFunction(() => window.__skyline.state === 'playing', null, { timeout: 30000 });
-  await page.keyboard.down('w');
+  await holdKey(page, 'w');
   await sleep(2500);
-  await page.keyboard.up('w');
+  await releaseKey(page, 'w');
   const free = await page.evaluate(() => {
     const g = window.__skyline;
     return {
@@ -465,7 +505,7 @@ async function main() {
   await page.screenshot({ path: path.join(SHOTS, '06-freeflight.png') });
 
   // ---------------------------------------------------------------- pause
-  await page.keyboard.press('Escape');
+  await pressKey(page, 'Escape');
   const didPause = await waitFor(page, () => window.__skyline.state === 'paused');
   const paused = await page.evaluate(() => ({
     state: window.__skyline.state,
@@ -540,12 +580,12 @@ async function main() {
   check('a takeoff mission starts the aircraft on the ground', takeoff.grounded, JSON.stringify(takeoff));
 
   await waitFor(page, () => window.__skyline.missions.state === 'running', null, 120000);
-  await page.keyboard.down('w');
+  await holdKey(page, 'w');
   await sleep(9000);
-  await page.keyboard.down('ArrowUp');
+  await holdKey(page, 'ArrowUp');
   await sleep(6000);
-  await page.keyboard.up('ArrowUp');
-  await page.keyboard.up('w');
+  await releaseKey(page, 'ArrowUp');
+  await releaseKey(page, 'w');
   const airborne = await page.evaluate(() => ({
     grounded: window.__skyline.flight.grounded,
     alt: Math.round(window.__skyline.flight.position.y),
@@ -561,6 +601,7 @@ async function main() {
     !/WebGL|SwiftShader|GPU stall|Automatic fallback|deprecated|AudioContext|fallback to software/i.test(t));
   check('no console errors', realErrors.length === 0, realErrors.slice(0, 4).join(' | '));
 
+  clearTimeout(deadline);
   await browser.close();
   server.close();
 
@@ -578,31 +619,17 @@ async function main() {
 async function flyMission(page, budgetMs) {
   const deadline = Date.now() + budgetMs;
   const held = new Set();
-  // Key events go through the same blocked main thread as evaluate does, so they need
-  // the same guard; without it the loop hangs here instead of on a telemetry read.
-  const keyTimeout = (promise, ms) => Promise.race([
-    promise,
-    new Promise((_, reject) => setTimeout(() => reject(new Error('key event timed out')), ms)),
-  ]);
   const setKeys = async (wanted) => {
-    for (const k of held) if (!wanted.has(k)) { await keyTimeout(page.keyboard.up(k), 20000); held.delete(k); }
-    for (const k of wanted) if (!held.has(k)) { await keyTimeout(page.keyboard.down(k), 20000); held.add(k); }
+    for (const k of held) if (!wanted.has(k)) { await releaseKey(page, k); held.delete(k); }
+    for (const k of wanted) if (!held.has(k)) { await holdKey(page, k); held.add(k); }
   };
 
   let lastPassed = 0;
   let lastReport = Date.now();
-  // page.evaluate has no timeout of its own, and a page rendering at two frames a
-  // second can keep one waiting for a free slot indefinitely. Without this guard the
-  // flight loop hangs past its own deadline and takes the whole run with it.
-  const withTimeout = (promise, ms, label) => Promise.race([
-    promise,
-    new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out`)), ms)),
-  ]);
-
   while (Date.now() < deadline) {
     let s;
     try {
-      s = await withTimeout(page.evaluate(() => {
+      s = await evaluate(page, () => {
       const g = window.__skyline;
       const st = g.missions.status();
       if (!st.nav) {
@@ -625,7 +652,7 @@ async function flyMission(page, budgetMs) {
         agl: f.aboveGround,
         stall: f.stallFactor,
       };
-      }), 30000, 'flight telemetry read');
+      });
     } catch (err) {
       console.log(`       ${err.message}; the page is not keeping up, ending the hand-flown section`);
       break;
