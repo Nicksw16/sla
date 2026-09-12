@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { clamp01, lerp, smoothstep } from '../core/MathUtils.js';
+import { clamp, clamp01, lerp, smoothstep } from '../core/MathUtils.js';
 import { Rng, fbm2D } from '../core/Rng.js';
 import { REGIONS, REGION_ORDER, TILE } from '../data/regions.js';
 import { terrainHeight, isWater, isAirportClearZone } from './Terrain.js';
@@ -260,7 +260,7 @@ export class ObstacleGrid {
 
 /** One building: stacked masses, optional spire, registered for collision. */
 function addBuilding(ctx, opts) {
-  const { box, cyl, cone, grid } = ctx;
+  const { box, cyl, cone, roof, grid } = ctx;
   const { x, z, w, d, height, rot, palette, glass, rng, type } = opts;
   const base = terrainHeight(x, z) - 2;
   const color = new THREE.Color(palette[rng.int(0, palette.length - 1)]);
@@ -281,8 +281,13 @@ function addBuilding(ctx, opts) {
   } else if (type === 'house') {
     const h = height;
     box.add(x, base + h / 2, z, w, h, d, rot, color, 0.1);
-    cone.add(x, base + h + h * 0.3, z, Math.max(w, d) * 0.78, h * 0.62, Math.max(w, d) * 0.78, rot + Math.PI / 4, color.clone().multiplyScalar(0.62));
-    top = base + h * 1.6;
+    // A pyramid sized to the box's own half-diagonal and turned 45 degrees sits on
+    // the walls instead of hanging over them like a hat.
+    const roofR = Math.hypot(w, d) * 0.5 * 1.04;
+    const roofH = h * 0.5;
+    roof.add(x, base + h + roofH / 2, z, roofR, roofH, roofR, rot + Math.PI / 4,
+      color.clone().multiplyScalar(0.78));
+    top = base + h + roofH;
   } else if (type === 'shed') {
     box.add(x, base + height / 2, z, w, height, d, rot, color, 0.05);
     // Roof vents / skylights.
@@ -342,11 +347,13 @@ export function generateCity({ seed = 20260912, detail = 1 } = {}) {
   const grid = new ObstacleGrid(220);
 
   const facade = facadeMaterial();
-  const roofMat = simpleMaterial(0x8b8f96, { rough: 0.9, metal: 0.05 });
+  const roofMat = simpleMaterial(0xb0b4ba, { rough: 0.9, metal: 0.05 });
   const ctx = {
     box: new InstanceBatch(new THREE.BoxGeometry(1, 1, 1), facade, { facade: true }),
     cyl: new InstanceBatch(new THREE.CylinderGeometry(1, 1, 1, 12), facade, { facade: true }),
     cone: new InstanceBatch(new THREE.ConeGeometry(1, 1, 8), roofMat),
+    // Four-sided, so a house gets a pitched roof rather than an octagonal hat.
+    roof: new InstanceBatch(new THREE.ConeGeometry(1, 1, 4), roofMat),
     grid,
   };
 
@@ -381,14 +388,26 @@ export function generateCity({ seed = 20260912, detail = 1 } = {}) {
         const distFromCore = Math.hypot(bx - region.cx, bz - region.cz) / half;
         const coreBias = 1 - smoothstep(0.1, 1.05, distFromCore) * 0.62;
 
-        const perBlock = b.footprint[1] > 70 ? 1 : rng.int(1, 2);
+        // How many buildings fit in a block depends on how big they are. A district of
+        // houses with one house per 112 m block reads as litter scattered on a street
+        // grid rather than as a neighbourhood, so small footprints get a sub-grid.
+        const avgFoot = (b.footprint[0] + b.footprint[1]) * 0.5;
+        const perBlock = avgFoot > 70 ? 1 : clamp(Math.round((BLOCK * 0.85) / avgFoot), 1, 4);
+        const cells = perBlock > 1 ? Math.ceil(Math.sqrt(perBlock)) : 1;
+        const cellSize = BLOCK / cells;
+
         for (let k = 0; k < perBlock; k++) {
-          const maxFoot = BLOCK * 0.94;
-          const fw = Math.min(maxFoot, rng.range(b.footprint[0], b.footprint[1]) / (perBlock > 1 ? 1.55 : 1));
+          const maxFoot = cellSize * 0.9;
+          const shrink = perBlock > 1 ? Math.sqrt(perBlock) * 0.72 : 1;
+          const fw = Math.min(maxFoot, rng.range(b.footprint[0], b.footprint[1]) / shrink);
           const fd = Math.min(maxFoot, fw * rng.range(0.7, 1.35));
-          const jitter = (BLOCK - Math.max(fw, fd)) * 0.42;
-          const x = bx + rng.range(-jitter, jitter);
-          const z = bz + rng.range(-jitter, jitter);
+          // Lay them out on the sub-grid, then jitter inside their own cell, so they
+          // spread across the block instead of piling up in the middle.
+          const cx = (k % cells) - (cells - 1) / 2;
+          const cz = Math.floor(k / cells) - (cells - 1) / 2;
+          const jitter = Math.max(0, (cellSize - Math.max(fw, fd)) * 0.4);
+          const x = bx + cx * cellSize + rng.range(-jitter, jitter);
+          const z = bz + cz * cellSize + rng.range(-jitter, jitter);
           if (isWater(x, z) || isAirportClearZone(x, z)) continue;
 
           const type = buildingTypeFor(region, rng);
@@ -414,13 +433,14 @@ export function generateCity({ seed = 20260912, detail = 1 } = {}) {
   const boxes = ctx.box.build('city:boxes');
   const cyls = ctx.cyl.build('city:cylinders');
   const cones = ctx.cone.build('city:cones');
-  for (const m of [boxes, cyls, cones]) if (m) group.add(m);
+  const roofs = ctx.roof.build('city:roofs');
+  for (const m of [boxes, cyls, cones, roofs]) if (m) group.add(m);
 
   group.userData.facadeUniforms = facade.userData.uniforms;
   group.userData.urban = urban;
   group.userData.stats = { buildings: placed, colliders: grid.count, perRegion };
   group.userData.dispose = () => {
-    for (const m of [boxes, cyls, cones]) m?.geometry.dispose();
+    for (const m of [boxes, cyls, cones, roofs]) m?.geometry.dispose();
     facade.dispose();
     roofMat.dispose();
   };

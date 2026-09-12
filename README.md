@@ -85,8 +85,10 @@ than the fully upgraded one below it, so upgrades close a gap without erasing it
 A 9 km × 9 km world: nine districts on a 3 × 3 grid, ocean to the south, an 800 m mountain
 ridge to the north.
 
-Around 2,000 buildings are generated from a seed, each composed of stacked masses with
-setbacks and crowns so no two silhouettes repeat, all drawn from three instanced meshes.
+Around 3,200 buildings are generated from a seed, each composed of stacked masses with
+setbacks and crowns so no two silhouettes repeat, all drawn from four instanced meshes.
+Small buildings are laid out on a sub-grid inside each block, so a district of houses reads
+as a neighbourhood rather than as one house per city block.
 Streets are painted in the terrain shader rather than built as geometry — zero extra
 triangles for 80 square kilometres of road, and they follow the ground exactly.
 
@@ -147,8 +149,9 @@ adding an entry.
 - Particles are pooled and recycled; nothing allocates mid-flight.
 - If the frame rate sits low, internal resolution drops before anything else.
 
-Measured on the build in this repository: about 198,000 triangles and 110 draw calls for
-the full city, with world updates at roughly 0.3 ms per frame.
+Measured on the build in this repository: about 77,000 triangles for the city itself and
+around 200,000 for a typical view including terrain, landmarks and traffic, in roughly 100
+draw calls, with world updates at about 0.3 ms per frame.
 
 ## Tests
 

@@ -54,6 +54,9 @@ export class HangarScene {
     grid.position.y = -2.5;
     this.scene.add(grid);
 
+    // The screen's panels occupy the left of the viewport, so the aircraft is framed
+    // to the right of centre rather than hidden behind them.
+    this.framingShift = -7;
     this.model = null;
     this.telemetry = {
       throttle: 0.35, turbo: false, gearDown: true, speed: 0, speedFrac: 0,
@@ -97,7 +100,7 @@ export class HangarScene {
       Math.sin(this.pitch) * this.distance + 2.2,
       Math.cos(this.yaw) * cp * this.distance,
     );
-    this.camera.lookAt(0, 0.5, 0);
+    this.camera.lookAt(this.framingShift, 0.5, 0);
 
     if (this.model) {
       // Idle animation: the prop turns and the surfaces breathe, so the aircraft on
@@ -112,6 +115,8 @@ export class HangarScene {
 
   resize(width, height) {
     this.camera.aspect = width / height;
+    // On a narrow screen the panels stack and the aircraft belongs in the middle.
+    this.framingShift = width < 900 ? 0 : -7;
     this.camera.updateProjectionMatrix();
   }
 

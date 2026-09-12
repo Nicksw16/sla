@@ -202,7 +202,7 @@ export class ContrailSystem {
         fragmentShader: `
           uniform float uStrength;
           varying float vAlpha;
-          void main() { gl_FragColor = vec4(0.86, 0.93, 1.0, vAlpha * uStrength * 0.5); }`,
+          void main() { gl_FragColor = vec4(0.86, 0.93, 1.0, vAlpha * uStrength * 0.28); }`,
       });
       const line = new THREE.Line(geo, mat);
       line.frustumCulled = false;
@@ -226,10 +226,12 @@ export class ContrailSystem {
   }
 
   update(dt, flight, spec, telemetry) {
-    // Vortices form under load: hard turns, or simply going very fast.
-    const load = clamp01((Math.abs(telemetry.gLoad) - 1.6) / 2.4);
-    const fast = clamp01((telemetry.speed / spec.maxSpeed - 0.72) / 0.28);
-    const strength = clamp01(Math.max(load, fast * 0.7)) * (telemetry.grounded ? 0 : 1);
+    // Vortices form under load. Thresholds are deliberately high: at the previous
+    // settings the trails were visible at ordinary cruise, where they read as two
+    // stray lines rather than as the aircraft working hard.
+    const load = clamp01((Math.abs(telemetry.gLoad) - 2.2) / 2.2);
+    const fast = clamp01((telemetry.speed / spec.maxSpeed - 0.93) / 0.07);
+    const strength = clamp01(Math.max(load, fast * 0.55)) * (telemetry.grounded ? 0 : 1);
 
     const halfSpan = spec.model.wingspan * 0.5;
     for (let s = 0; s < 2; s++) {

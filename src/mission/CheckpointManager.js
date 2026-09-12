@@ -22,7 +22,22 @@ const COLORS = {
   final: new THREE.Color(0xffb340),
 };
 
+/**
+ * Ring material.
+ *
+ * Normal blending, not additive. Additive was tried and looked good against a dark
+ * sky, but over a bright noon sky every ring saturated to white and the colour
+ * coding - cyan for next, green for passed, amber for the final gate - stopped
+ * meaning anything. Legibility beats glow (spec §118).
+ */
 function ringMaterial(color, opacity = 1) {
+  return new THREE.MeshBasicMaterial({
+    color, transparent: true, opacity, side: THREE.DoubleSide, depthWrite: false,
+  });
+}
+
+/** Additive, for the soft glow elements where washing out is the intent. */
+function glowMaterial(color, opacity = 1) {
   return new THREE.MeshBasicMaterial({
     color, transparent: true, opacity, side: THREE.DoubleSide,
     blending: THREE.AdditiveBlending, depthWrite: false,
@@ -44,12 +59,12 @@ class CheckpointVisual {
     );
     this.group.add(this.outer);
     // Soft disc so the opening reads as a hole to aim at.
-    this.disc = new THREE.Mesh(new THREE.CircleGeometry(1, 28), ringMaterial(COLORS.next, 0.07));
+    this.disc = new THREE.Mesh(new THREE.CircleGeometry(1, 28), glowMaterial(COLORS.next, 0.07));
     this.group.add(this.disc);
     // Light column, for finding it between buildings from a long way out.
     this.column = new THREE.Mesh(
       new THREE.CylinderGeometry(0.1, 0.1, 30, 6, 1, true),
-      ringMaterial(COLORS.next, 0.16),
+      glowMaterial(COLORS.next, 0.16),
     );
     this.group.add(this.column);
     // Four chevrons, which give the ring a readable orientation.

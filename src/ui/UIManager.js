@@ -500,10 +500,11 @@ export class UIManager {
       if (result.rivalTime) rows.push([result.rivalName ?? 'RIVAL', formatTime(result.rivalTime)]);
       if (result.beatRival) rows.push(['RESULT', 'YOU WON']);
     } else {
-      rows.push(['CHECKPOINTS', `${result.checkpointsPassed} / ${result.checkpointsTotal}`]);
+      // Labelled distinctly from the score line below, which is a different quantity.
+      rows.push(['GATES REACHED', `${result.checkpointsPassed} / ${result.checkpointsTotal}`]);
       rows.push(['TIME FLOWN', formatTime(result.time)]);
     }
-    rows.push(['CHECKPOINTS', formatNumber(b.checkpoints ?? 0)]);
+    rows.push(['CHECKPOINT SCORE', formatNumber(b.checkpoints ?? 0)]);
     if (b.precision) rows.push(['PRECISION', formatNumber(b.precision)]);
     if (b.speed) rows.push(['SPEED', formatNumber(b.speed)]);
     if (b.nearMiss) rows.push(['NEAR MISSES', formatNumber(b.nearMiss)]);

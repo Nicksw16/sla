@@ -137,8 +137,11 @@ function buildRing(innerHalf, outerHalf, step, material) {
           Math.abs(z0) < innerHalf && Math.abs(z1) <= innerHalf) continue;
 
       const y00 = h(x0, z0), y10 = h(x1, z0), y01 = h(x0, z1), y11 = h(x1, z1);
-      positions.push(x0, y00, z0, x1, y10, z0, x1, y11, z1);
-      positions.push(x0, y00, z0, x1, y11, z1, x0, y01, z1);
+      // Counter-clockwise seen from above, so the ground faces the sky. Wound the
+      // other way the whole world is back-face culled from every altitude the player
+      // ever occupies, and computeVertexNormals lights it from underneath.
+      positions.push(x0, y00, z0, x1, y11, z1, x1, y10, z0);
+      positions.push(x0, y00, z0, x0, y01, z1, x1, y11, z1);
       for (let k = 0; k < 6; k++) normals.push(0, 1, 0);
       uvs.push(0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1);
     }
@@ -358,9 +361,12 @@ export function createWater() {
         float w2 = sin(p.x * 0.051 - uTime * 2.1) * 0.35;
         p.y += (w + w2) * 1.5 * uChop;
         vWave = w;
-        vec4 mv = modelViewMatrix * vec4(p, 1.0);
+        // Must be called mvPosition: three's fog_vertex chunk below reads that exact
+        // name, and naming it anything else fails to compile the whole shader, which
+        // silently removes the ocean from the world.
+        vec4 mvPosition = modelViewMatrix * vec4(p, 1.0);
         vWorld = (modelMatrix * vec4(p, 1.0)).xyz;
-        gl_Position = projectionMatrix * mv;
+        gl_Position = projectionMatrix * mvPosition;
         #include <fog_vertex>
       }`,
     fragmentShader: `

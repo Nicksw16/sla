@@ -149,10 +149,10 @@ export const MISSIONS = [
     desc: 'Down among the roofs, weaving left and right between the towers. The gates are smaller and the buildings are very close. Speed is no longer free.',
     tip: 'Slow down before the gate, not in it. Scraping a wall costs you the multiplier as well as the hull.',
     conditions: { weather: 'clear', hour: 14 },
-    start: { x: 1600, y: 190, z: 1000, heading: -Math.PI * 0.75, speed: 72 },
+    start: { x: 1600, y: 215, z: 1000, heading: -Math.PI * 0.75, speed: 72 },
     route: [
-      ...slalom([1200, 180, 700], [-900, 180, -800], 7, 210, 30),
-      pt(-1200, 200, -1200, 30),
+      ...slalom([1200, 200, 700], [-900, 200, -800], 7, 210, 30),
+      pt(-1200, 220, -1200, 30),
     ],
     timeLimit: 140,
     stars: { time: [76, 95, 130] },
@@ -478,7 +478,7 @@ export const MISSIONS = [
     conditions: { weather: 'clear', hour: 13.5 },
     start: { x: 3000, y: 300, z: 1800, heading: 0, speed: 105 },
     route: [
-      ...slalom([3000, 280, 1200], [3100, 300, -1000], 6, 170, 22),
+      ...slalom([3000, 340, 1200], [3100, 340, -1000], 6, 170, 22),
       pt(3180, 520, -1500, 24),
       ...arc(3180, 180, 500, 4.2, 1.8, 4, 520, 320, 24),
     ],
