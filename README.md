@@ -186,6 +186,11 @@ renders, and the aircraft can take off from the runway.
   route and its pace scales with skill, but it does not thread every ring.
 - **No replay or photo mode.** Both are listed as secondary in the specification and were
   cut in favour of the core loop.
+- **Routes are single-path.** There is no branching checkpoint route offering a safe long
+  way round against a risky short cut. The checkpoint system advances through one ordered
+  sequence, and supporting alternatives means changing that core, which was not worth
+  destabilising late. The nearest thing that exists is authored rather than structural: the
+  gap under Northgate Bridge is a genuine short cut you can choose to take.
 - **No collectible tokens scattered across the map.** The champion livery is awarded for
   finishing the campaign instead, so nothing in the hangar advertises an unlock with no
   path to it.
