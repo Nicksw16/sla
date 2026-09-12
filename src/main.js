@@ -629,9 +629,17 @@ class Game {
       this._outroTimer -= dt;
       if (this._outroTimer <= 0) this._showResults();
     }
+    // The respawn belongs to the free-flight session it was armed in. Leaving free
+    // flight before it fires - to the menu, or straight into a mission - cancels it:
+    // otherwise it lands 2.6 s later and teleports the player off the runway and into
+    // the air over downtown, mid-countdown.
     if (this._freeFlightRespawn > 0) {
-      this._freeFlightRespawn -= dt;
-      if (this._freeFlightRespawn <= 0) this._respawnFreeFlight();
+      if (!this.missions.freeFlight) {
+        this._freeFlightRespawn = 0;
+      } else {
+        this._freeFlightRespawn -= dt;
+        if (this._freeFlightRespawn <= 0) this._respawnFreeFlight();
+      }
     }
 
     this._accumulateStats(dt);

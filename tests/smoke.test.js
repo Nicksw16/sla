@@ -581,17 +581,46 @@ async function main() {
   await sleep(1200);
   await page.screenshot({ path: path.join(SHOTS, '07-night-storm.png') });
 
-  // ---------------------------------------------------------------- landing
+  // ---------------------------------------------------------------- takeoff
   console.log('\n  testing takeoff from the runway…');
-  const takeoff = await page.evaluate(async () => {
+  // The free-flight crash above arms a respawn that fires 2.6 s later. Arm it again
+  // deliberately: starting a mission has to cancel it. Left running it lands during the
+  // countdown and teleports the aircraft off the runway into the air over downtown -
+  // which is how this ran for one build, as an intermittent failure here.
+  await evaluate(page, () => {
     const g = window.__skyline;
+    g._freeFlightRespawn = 2.6;
     g._startMission('departure');
-    await new Promise((r) => setTimeout(r, 1200));
-    return { grounded: g.flight.grounded, state: g.missions.state, name: g.missions.mission?.name };
   });
-  check('a takeoff mission starts the aircraft on the ground', takeoff.grounded, JSON.stringify(takeoff));
+  // Waiting on the spawn rather than sleeping: the mission state flips to countdown a
+  // fade before the aircraft is placed, so a fixed sleep reads one or the other.
+  const spawned = await waitFor(page, () => {
+    const g = window.__skyline;
+    return g.missions.mission?.id === 'departure' && g.flight.grounded;
+  }, null, 60000);
+  const takeoff = await evaluate(page, () => {
+    const g = window.__skyline;
+    return {
+      grounded: g.flight.grounded, state: g.missions.state, name: g.missions.mission?.name,
+      onRunway: g.world.isRunway(g.flight.position.x, g.flight.position.z),
+      respawnPending: Number(g._freeFlightRespawn.toFixed(1)),
+    };
+  });
+  check('a takeoff mission starts the aircraft on the ground',
+    spawned && takeoff.grounded && takeoff.onRunway, JSON.stringify(takeoff));
 
+  // The countdown is three seconds of game time, longer than the respawn it has to
+  // outlive, so reaching the start of the run still on the concrete is the proof.
   await waitFor(page, () => window.__skyline.missions.state === 'running', null, 120000);
+  const survived = await evaluate(page, () => {
+    const g = window.__skyline;
+    return {
+      grounded: g.flight.grounded, respawnPending: Number(g._freeFlightRespawn.toFixed(1)),
+      alt: Math.round(g.flight.position.y),
+    };
+  });
+  check('a pending free-flight respawn cannot hijack a mission start',
+    survived.grounded && survived.respawnPending === 0, JSON.stringify(survived));
   await holdKey(page, 'w');
   await sleep(9000);
   await holdKey(page, 'ArrowUp');
