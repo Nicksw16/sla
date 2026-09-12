@@ -176,11 +176,15 @@ function facadeMaterial() {
           float floorLife = hash12(vec2(floorIdx * 2.3, vSeed * 5.0));
           float roomLife = hash12(vec2(bayIdx, floorIdx + vSeed * 13.0));
           float occupancy = mix(0.62, 0.34, step(0.5, vStyle));
-          float lit = step(occupancy, roomLife * 0.55 + floorLife * 0.45) * glassPane * uNight;
+          // Crisp windows near, an even glow far. A hard on/off step a few pixels wide
+          // is the same crawling speckle the wall pattern had, only brighter.
+          float litSharp = step(occupancy, roomLife * 0.55 + floorLife * 0.45) * glassPane;
+          float litSoft = (1.0 - occupancy) * 0.42;
+          float lit = mix(litSoft, litSharp, near) * uNight;
           // Offices burn cool and even; homes burn warm and patchy.
           vec3 lampColour = mix(uWindowCool, uWindowWarm, clamp(vStyle + hash12(vec2(bayIdx, floorIdx)) * 0.5, 0.0, 1.0));
           // Distant towers keep a soft glow instead of dissolving into white noise.
-          totalEmissiveRadiance += lampColour * lit * (0.5 + 0.32 * roomLife) * mix(0.4, 1.0, near);
+          totalEmissiveRadiance += lampColour * lit * (0.5 + 0.32 * roomLife);
           // Shopfronts stay lit after dark and spill onto the pavement.
           totalEmissiveRadiance += uWindowWarm * shopGlass * uNight * 0.85 * mix(0.4, 1.0, near);
           // Sky and street bounce, so a facade out of the sun still shows its face.

@@ -276,8 +276,9 @@ function groundMaterial(urbanTexture, period, roadWidth) {
           c = mix(c, vec3(0.82, 0.82, 0.78), zebra * 0.7);
 
           // Manhole covers and patched repairs, so the asphalt is not one flat tone.
-          float patch = hashT(floor(along / 7.0));
-          c *= 1.0 - paved * urban * sharp * 0.10 * step(0.72, patch);
+          // "patch" is a reserved word in GLSL, hence the name.
+          float repair = hashT(floor(along / 7.0));
+          c *= 1.0 - paved * urban * sharp * 0.10 * step(0.72, repair);
 
           // Sodium street lighting after dark, pooled under the lamps rather than even.
           float lampX = 1.0 - smoothstep(0.0, 5.0, abs(mod(along.x, 32.0) - 16.0));
