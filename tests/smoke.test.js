@@ -589,15 +589,28 @@ async function main() {
     const g = window.__skyline;
     g._onUiAction('tomenu');
     g._onUiAction('store');
-    const card = document.querySelector('.store-card');
+    // By now the run has granted every star and a pile of credits, so nothing would be
+    // locked. Take them away for the reading, then give them back: the point of the
+    // check is what a new player sees.
+    const stars = g.progression.data.stars;
+    const credits = g.progression.data.credits;
+    g.progression.data.stars = {};
+    g.progression.data.credits = 0;
+    g.ui.renderStore();
+    const poor = {
+      locked: document.querySelectorAll('.store-card.locked').length,
+      priced: [...document.querySelectorAll('.store-card')].some((c) => /CR/.test(c.textContent)),
+    };
+    g.progression.data.stars = stars;
+    g.progression.data.credits = credits;
+    g.ui.renderStore();
     return {
       state: g.state,
       classes: document.querySelectorAll('.store-class').length,
       cards: document.querySelectorAll('.store-card').length,
-      locked: document.querySelectorAll('.store-card.locked').length,
       sheetRows: document.querySelectorAll('.sd-row').length,
       bars: document.querySelectorAll('.sd-bars .stat-line').length,
-      priced: /CR|★/.test(card?.textContent ?? ''),
+      ...poor,
     };
   });
   check('the store lists the whole catalogue by class',
@@ -635,6 +648,10 @@ async function main() {
     swap.active === 'skylark' && swap.flown.includes('SKYLARK') && swap.state === 'store', JSON.stringify(swap));
 
   // ------------------------------------------------------------- hidden beacons
+  // Back into the air first: beacons are only collected while the simulation runs, and
+  // the store section above left the game sitting on a menu.
+  await evaluate(page, () => window.__skyline._startFreeFlight());
+  await waitFor(page, () => window.__skyline.state === 'playing', null, 60000);
   // Flown to rather than teleported onto where it matters: the aircraft is placed at
   // the beacon and the proximity test has to fire on its own in the next frames.
   const beacon = await evaluate(page, async (b) => {
