@@ -578,9 +578,15 @@ async function main() {
 async function flyMission(page, budgetMs) {
   const deadline = Date.now() + budgetMs;
   const held = new Set();
+  // Key events go through the same blocked main thread as evaluate does, so they need
+  // the same guard; without it the loop hangs here instead of on a telemetry read.
+  const keyTimeout = (promise, ms) => Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error('key event timed out')), ms)),
+  ]);
   const setKeys = async (wanted) => {
-    for (const k of held) if (!wanted.has(k)) { await page.keyboard.up(k); held.delete(k); }
-    for (const k of wanted) if (!held.has(k)) { await page.keyboard.down(k); held.add(k); }
+    for (const k of held) if (!wanted.has(k)) { await keyTimeout(page.keyboard.up(k), 20000); held.delete(k); }
+    for (const k of wanted) if (!held.has(k)) { await keyTimeout(page.keyboard.down(k), 20000); held.add(k); }
   };
 
   let lastPassed = 0;
@@ -655,11 +661,16 @@ async function flyMission(page, budgetMs) {
     if (s.speed < s.maxSpeed * 0.82 || s.stall > 0.2) want.add('w');
     else if (Math.abs(s.bearing) > 0.7 && s.dist < 300) want.add('s');
 
-    await setKeys(want);
+    try {
+      await setKeys(want);
+    } catch (err) {
+      console.log(`       ${err.message}; ending the hand-flown section`);
+      break;
+    }
     await sleep(80);
   }
 
-  await setKeys(new Set());
+  await setKeys(new Set()).catch(() => {});
   return page.evaluate(() => {
     const g = window.__skyline;
     const r = g.missions.result ?? g._pendingResult?.result ?? {};
