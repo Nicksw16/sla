@@ -10,10 +10,14 @@ every sound are generated at runtime.
 
 ```bash
 npm install
-npm run dev       # development server
-npm run build     # production build into dist/
-npm test          # flight physics, content validation, headless end-to-end
+npm run dev         # development server
+npm run build       # production build into dist/
+npm run test:unit   # flight physics and content validation, seconds, no browser
+npm test            # the above, then a build, then the headless end-to-end run
 ```
+
+The end-to-end run drives a real browser and flies a mission, so it takes several
+minutes. `npm run test:unit` is the one to run while working.
 
 ## Controls
 
@@ -149,9 +153,10 @@ the full city, with world updates at roughly 0.3 ms per frame.
 ## Tests
 
 ```bash
-npm run test:flight   # 24 physics assertions, plain Node, no browser
-node tests/content.test.js   # 19 content assertions
-npm test              # the above plus the headless end-to-end run
+npm run test:flight    # 24 physics assertions, plain Node, no renderer
+npm run test:content   # 19 content assertions against the generated world
+npm run test:e2e       # headless browser run (needs a build first)
+npm test               # all of it
 ```
 
 `tests/flight.test.js` pins the axis conventions and the handling promises: that banking
