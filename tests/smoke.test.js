@@ -293,7 +293,10 @@ async function main() {
   console.log('\n  flying the mission with keyboard input…');
   // Generous budget: the route is about 50 s of game time, but software rendering
   // runs several times slower than real time, and the scripted pilot is not efficient.
-  const flight = await flyMission(page, 480000);
+  // FAST=1 shortens the hand-flown section when the point of the run is the rest of
+  // the suite; the mission is then completed on rails below either way.
+  const flightBudget = process.env.FAST === '1' ? 60000 : 480000;
+  const flight = await flyMission(page, flightBudget);
   check('checkpoints can be flown through', flight.passed > 0, `${flight.passed}/${flight.total} gates`);
   check('most of the route can be flown on the keyboard', flight.passed >= 4,
     `${flight.passed}/${flight.total} gates flown by the scripted pilot`);

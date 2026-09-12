@@ -165,7 +165,14 @@ class Game {
   }
 
   _onSettingChanged(key) {
-    if (key === 'quality' || key === 'renderScaleBias') {
+    // The resolution bias changes often - the watchdog can touch it every few
+    // seconds - and only needs the renderer resized. Rebuilding the world's quality
+    // settings on every nudge tears down and recreates the shadow map, which is
+    // exactly the wrong thing to do to a machine that is already struggling.
+    if (key === 'renderScaleBias') {
+      this._applyRenderScale();
+    }
+    if (key === 'quality') {
       this._applyRenderScale();
       this.renderer.shadowMap.enabled = this.settings.preset.shadows;
       this.world?.applyQuality();
