@@ -86,7 +86,7 @@ export function buildAircraft(spec, paintId = 'factory') {
 
   const group = new THREE.Group();
   group.name = `aircraft:${spec.id}`;
-  const parts = { props: [], afterburners: [], gear: [], lights: [] };
+  const parts = { props: [], propDiscs: [], afterburners: [], gear: [], lights: [] };
 
   const len = m.length;
   const radius = Math.max(0.42, len * 0.085);
@@ -183,28 +183,47 @@ export function buildAircraft(spec, paintId = 'factory') {
 
   // ---- engines
   if (m.engines === 'prop') {
-    const spinner = new THREE.Mesh(new THREE.ConeGeometry(radius * 0.34, radius * 0.8, 10), accentMat);
-    spinner.rotation.x = -Math.PI / 2;
-    spinner.position.set(0, 0, -len * 0.5 - radius * 0.3);
-    group.add(spinner);
+    // One prop sits on the nose; a twin hangs its engines off the wing, which is the
+    // silhouette that tells a heavy hauler apart from a sport aircraft at a glance.
+    const count = m.propCount ?? 1;
+    for (let i = 0; i < count; i++) {
+      const side = count > 1 ? (i === 0 ? 1 : -1) : 0;
+      const x = side * m.wingspan * 0.26;
+      const z = count > 1 ? -len * 0.1 : -len * 0.5 - radius * 0.3;
 
-    const propGroup = new THREE.Group();
-    propGroup.position.copy(spinner.position);
-    const bladeGeo = new THREE.BoxGeometry(m.propRadius * 2, 0.04, 0.16);
-    for (let i = 0; i < 2; i++) {
-      const blade = new THREE.Mesh(bladeGeo, darkMat);
-      blade.rotation.z = (i / 2) * Math.PI;
-      propGroup.add(blade);
+      if (count > 1) {
+        const nacelle = new THREE.Mesh(
+          new THREE.CylinderGeometry(radius * 0.42, radius * 0.34, len * 0.34, 10), trimMat,
+        );
+        nacelle.rotation.x = Math.PI / 2;
+        nacelle.position.set(x, radius * 0.05, z + len * 0.1);
+        nacelle.castShadow = true;
+        group.add(nacelle);
+      }
+
+      const spinner = new THREE.Mesh(new THREE.ConeGeometry(radius * 0.34, radius * 0.8, 10), accentMat);
+      spinner.rotation.x = -Math.PI / 2;
+      spinner.position.set(x, count > 1 ? radius * 0.05 : 0, z);
+      group.add(spinner);
+
+      const propGroup = new THREE.Group();
+      propGroup.position.copy(spinner.position);
+      const bladeGeo = new THREE.BoxGeometry(m.propRadius * 2, 0.04, 0.16);
+      for (let b = 0; b < 2; b++) {
+        const blade = new THREE.Mesh(bladeGeo, darkMat);
+        blade.rotation.z = (b / 2) * Math.PI;
+        propGroup.add(blade);
+      }
+      // Blur disc: what you actually perceive once the prop is turning.
+      const disc = new THREE.Mesh(
+        new THREE.CircleGeometry(m.propRadius, 20),
+        new THREE.MeshBasicMaterial({ color: 0x9fb0c0, transparent: true, opacity: 0.12, side: THREE.DoubleSide }),
+      );
+      propGroup.add(disc);
+      group.add(propGroup);
+      parts.props.push(propGroup);
+      parts.propDiscs.push(disc);
     }
-    // Blur disc: what you actually perceive once the prop is turning.
-    const disc = new THREE.Mesh(
-      new THREE.CircleGeometry(m.propRadius, 20),
-      new THREE.MeshBasicMaterial({ color: 0x9fb0c0, transparent: true, opacity: 0.12, side: THREE.DoubleSide }),
-    );
-    propGroup.add(disc);
-    group.add(propGroup);
-    parts.props.push(propGroup);
-    parts.propDisc = disc;
   } else {
     const count = m.jetCount ?? 1;
     const nacelleR = radius * (count > 1 ? 0.52 : 0.78);
@@ -275,8 +294,8 @@ export function animateAircraft(group, dt, telemetry, control) {
   const rpm = 8 + telemetry.throttle * 46 + telemetry.speed * 0.12;
   anim.propPhase += rpm * dt;
   for (const p of parts.props) p.rotation.z = anim.propPhase;
-  if (parts.propDisc) {
-    parts.propDisc.material.opacity = clamp01(0.04 + telemetry.throttle * 0.2);
+  for (const disc of parts.propDiscs ?? []) {
+    disc.material.opacity = clamp01(0.04 + telemetry.throttle * 0.2);
   }
 
   // Afterburner cone: only visible on turbo, scaled by how hard it is working.

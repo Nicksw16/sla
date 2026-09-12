@@ -76,18 +76,34 @@ stall into a dive, a dive into speed, and speed back into control.
 All of this is covered by unit tests in `tests/flight.test.js`, which run in plain Node
 with no renderer, against a flat-plane collider.
 
-## Aircraft
+## Aircraft and the store
 
-Five classes, differentiated by physics rather than by paint. Each stock aircraft is faster
-than the fully upgraded one below it, so upgrades close a gap without erasing it.
+Ten aircraft in five classes, differentiated by physics rather than by paint. The store
+sells them by class and shows the whole specification: top speed, turbo speed,
+acceleration, weight, lift, roll, pitch and rudder rates, turn tightness, stability,
+control response, momentum, airbrake, stall, rotate and landing speeds, turbo boost, tank,
+recharge and hull strength. Every one of those numbers is read by the flight model.
 
-| Aircraft | Role | Top speed | Character |
-| --- | --- | --- | --- |
-| Skylark LS-2 | Light sport | 338 km/h | Forgiving, stable, slow |
-| Vector S7 | Aerobatic | 464 km/h | Snaps into a bank, punishes carelessness |
-| Talon AX-9 | Jet trainer | 608 km/h | Carries energy through corners |
-| Meridian EX | Executive | 713 km/h | Heavy, smooth, very wide turns |
-| Wraith X-1 | Experimental | 864 km/h | Fastest, most agile, no stability, fragile |
+| Class | Aircraft | Top speed | Price | Character |
+| --- | --- | --- | --- | --- |
+| 1 Trainers | Skylark LS-2 | 338 km/h | free | Forgiving, stable, slow |
+| 1 Trainers | Kestrel K-3 | 356 km/h | 7,500 | Lowest stall in the game, toughest hull, lands anywhere |
+| 2 Sport | Vector S7 | 464 km/h | 11,000 | Snaps into a bank, punishes carelessness |
+| 2 Sport | Zephyr RX | 497 km/h | 26,000 | Clipped-wing racer, quick and unforgiving |
+| 3 Working | Nomad C-4 | 583 km/h | 44,000 | Twin turboprop, heaviest, barely notices a storm |
+| 3 Working | Talon AX-9 | 619 km/h | 52,000 | Jet trainer, carries energy through corners |
+| 4 High speed | Meridian EX | 713 km/h | 96,000 | Heavy, smooth, very wide turns |
+| 4 High speed | Sabre F-11 | 770 km/h | 118,000 | Interceptor: climbs and turns, drinks its turbo |
+| 5 Experimental | Wraith X-1 | 864 km/h | 165,000 | Agile, no stability, fragile |
+| 5 Experimental | Aurora HX | 943 km/h | 215,000 | Fastest, and needs most of the city to turn around |
+
+Within a class the two aircraft are side-grades — one is easier to fly, the other is
+faster. Between classes it is a real step up, and a fully upgraded aircraft never catches
+the stock aircraft one class above it, so upgrades close a gap without erasing it.
+
+Credits come from missions, from star bounties and first clears, from hidden beacons and,
+slowly, from free flight. Each class is affordable by the time its star gate opens; the
+Aurora costs more than one clean campaign pays, which is deliberate.
 
 ## Skyline City
 
@@ -197,7 +213,9 @@ speed, and it is the throttle, not the stick, that gets it flying again.
 `tests/content.test.js` validates authored data against the generated world — it is what
 caught three checkpoints buried inside the mountain, three more inside buildings and
 landmarks, the city generator placing buildings across the runway, and the balance bug
-where a fully upgraded Talon out-ran a stock Meridian. It does the same for the hidden
+where a fully upgraded Talon out-ran a stock Meridian. It also holds the store together:
+prices and star gates only rise, every class is filled and beats the one below it, each
+class is affordable by the time it unlocks, and no aircraft is a reskin of its neighbour. It does the same for the hidden
 beacons: of the twelve, five were first authored inside a landmark and one five metres
 off the ground.
 

@@ -21,6 +21,7 @@ import { chromium } from 'playwright';
 // read it directly rather than trying to discover mission ids through the DOM.
 import { MISSIONS } from '../src/data/missions.js';
 import { SECRETS } from '../src/data/secrets.js';
+import { AIRCRAFT_ORDER, TIERS } from '../src/data/aircraft.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DIST = path.join(ROOT, 'dist');
@@ -207,7 +208,8 @@ async function main() {
     hasModel: !!window.__skyline.hangar.model,
     state: window.__skyline.state,
   }));
-  check('the hangar lists every aircraft', hangar.active && hangar.cards === 5, JSON.stringify(hangar));
+  check('the hangar lists every aircraft',
+    hangar.active && hangar.cards === AIRCRAFT_ORDER.length, JSON.stringify(hangar));
   check('the hangar shows upgrades and stats', hangar.upgrades === 5 && hangar.stats >= 7, JSON.stringify(hangar));
   check('the hangar renders the actual aircraft model', hangar.hasModel);
   await page.screenshot({ path: path.join(SHOTS, '03-hangar.png') });
@@ -581,6 +583,56 @@ async function main() {
   await page.evaluate(() => window.__skyline.world.setConditions({ weather: 'storm', hour: 21.5, instant: true }));
   await sleep(1200);
   await page.screenshot({ path: path.join(SHOTS, '07-night-storm.png') });
+
+  // ----------------------------------------------------------------- the store
+  const store = await evaluate(page, () => {
+    const g = window.__skyline;
+    g._onUiAction('tomenu');
+    g._onUiAction('store');
+    const card = document.querySelector('.store-card');
+    return {
+      state: g.state,
+      classes: document.querySelectorAll('.store-class').length,
+      cards: document.querySelectorAll('.store-card').length,
+      locked: document.querySelectorAll('.store-card.locked').length,
+      sheetRows: document.querySelectorAll('.sd-row').length,
+      bars: document.querySelectorAll('.sd-bars .stat-line').length,
+      priced: /CR|★/.test(card?.textContent ?? ''),
+    };
+  });
+  check('the store lists the whole catalogue by class',
+    store.state === 'store' && store.cards === AIRCRAFT_ORDER.length && store.classes === TIERS.length,
+    JSON.stringify(store));
+  check('the store shows the full specification and locks what is not earned',
+    store.sheetRows >= 18 && store.bars >= 6 && store.locked > 0 && store.priced, JSON.stringify(store));
+
+  const purchase = await evaluate(page, () => {
+    const g = window.__skyline;
+    const dearest = [...document.querySelectorAll('.store-card')].pop().dataset.aircraft;
+    g.progression.data.credits = 400000;
+    g._onUiAction('storeSelect', { aircraft: dearest });
+    const before = { credits: g.progression.data.credits, owned: g.progression.data.ownedAircraft.length };
+    g._onUiAction('buyStoreAircraft', { aircraft: dearest });
+    return {
+      dearest, before,
+      credits: g.progression.data.credits,
+      owned: g.progression.data.ownedAircraft.length,
+      active: g.progression.data.activeAircraft,
+      flownTopSpeed: Math.round(g.flight.spec.maxSpeed * 3.6),
+    };
+  });
+  check('an aircraft can be bought in the store and is flown straight away',
+    purchase.owned === purchase.before.owned + 1 && purchase.credits < purchase.before.credits
+      && purchase.active === purchase.dearest && purchase.flownTopSpeed > 800, JSON.stringify(purchase));
+
+  const swap = await evaluate(page, () => {
+    const g = window.__skyline;
+    g._onUiAction('storeSelect', { aircraft: 'skylark' });
+    g._onUiAction('selectAircraft', { aircraft: 'skylark' });
+    return { active: g.progression.data.activeAircraft, flown: g.flight.spec.name, state: g.state };
+  });
+  check('an owned aircraft can be flown again from the store',
+    swap.active === 'skylark' && swap.flown.includes('SKYLARK') && swap.state === 'store', JSON.stringify(swap));
 
   // ------------------------------------------------------------- hidden beacons
   // Flown to rather than teleported onto where it matters: the aircraft is placed at

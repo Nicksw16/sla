@@ -55,6 +55,7 @@ const STATE = {
   OUTRO: 'outro',
   RESULTS: 'results',
   FREEFLIGHT: 'freeflight',
+  STORE: 'store',
   CHAMPION: 'champion',
 };
 
@@ -467,6 +468,22 @@ class Game {
         this.ui.selectedAircraft = this.progression.data.activeAircraft;
         this._enterScreen(STATE.HANGAR, 'hangar', () => this.ui.renderHangar());
         break;
+      case 'store':
+        this._enterScreen(STATE.STORE, 'store', () => this.ui.renderStore());
+        break;
+      case 'storeSelect':
+        this.ui.storeAircraft = data.aircraft;
+        this.ui.renderStore();
+        break;
+      case 'buyStoreAircraft': {
+        const bought = this.progression.buyAircraft(data.aircraft);
+        if (bought.ok) {
+          this._rebuildAircraftModel();
+          this.audio?.fanfare(true);
+        }
+        this.ui.renderStore();
+        break;
+      }
       case 'freeflight':
         this._enterScreen(STATE.FREEFLIGHT, 'freeflight', () => this.ui.renderFreeFlight());
         break;
@@ -513,6 +530,7 @@ class Game {
       }
       case 'selectAircraft':
         if (this.progression.selectAircraft(data.aircraft)) this._rebuildAircraftModel();
+        if (this.state === STATE.STORE) { this.ui.renderStore(); break; }
         this.ui.renderHangar();
         break;
       case 'buyUpgrade':

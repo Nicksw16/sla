@@ -5,7 +5,7 @@
  */
 import assert from 'node:assert/strict';
 import { MISSIONS, MISSION_BY_ID, TOTAL_STARS, gradeMission } from '../src/data/missions.js';
-import { AIRCRAFT, AIRCRAFT_ORDER } from '../src/data/aircraft.js';
+import { AIRCRAFT, AIRCRAFT_ORDER, TIERS } from '../src/data/aircraft.js';
 import { UPGRADE_TREE, UPGRADE_ORDER, applyUpgrades, PAINTS, upgradeCost } from '../src/data/upgrades.js';
 import { REGIONS, REGION_ORDER, LANDMARKS, RUNWAY } from '../src/data/regions.js';
 import { WEATHER } from '../src/data/weather.js';
@@ -137,15 +137,79 @@ test('aircraft are meaningfully different, not reskins', () => {
   }
 });
 
-test('a fully upgraded aircraft stays below the next class', () => {
-  // Upgrades must help without replacing the aircraft progression (§54).
+test('a fully upgraded aircraft stays below the class above it', () => {
+  // Upgrades must help without replacing the aircraft progression (§54). The roster
+  // runs in pairs - within a class the second aircraft is a side-grade, not a strict
+  // improvement - so the rung to clear is two along, which is the next class.
   const maxLevels = Object.fromEntries(UPGRADE_ORDER.map((k) => [k, UPGRADE_TREE[k].levels]));
-  for (let i = 0; i < AIRCRAFT_ORDER.length - 1; i++) {
+  for (let i = 0; i < AIRCRAFT_ORDER.length - 2; i++) {
     const maxed = applyUpgrades(AIRCRAFT[AIRCRAFT_ORDER[i]], maxLevels);
-    const next = AIRCRAFT[AIRCRAFT_ORDER[i + 1]];
-    assert.ok(maxed.maxSpeed < next.maxSpeed,
-      `maxed ${AIRCRAFT_ORDER[i]} (${maxed.maxSpeed.toFixed(0)}) beats stock ${next.id} (${next.maxSpeed})`);
+    const above = AIRCRAFT[AIRCRAFT_ORDER[i + 2]];
+    assert.ok(maxed.maxSpeed < above.maxSpeed,
+      `maxed ${AIRCRAFT_ORDER[i]} (${maxed.maxSpeed.toFixed(0)}) beats stock ${above.id} (${above.maxSpeed})`);
   }
+});
+
+test('the store catalogue is ordered and every class is filled', () => {
+  // What the store screen promises: prices and star gates only ever go up as you read
+  // down the list, and each class holds exactly the two aircraft it advertises.
+  let lastPrice = -1;
+  let lastStars = -1;
+  let lastTier = 0;
+  for (const id of AIRCRAFT_ORDER) {
+    const a = AIRCRAFT[id];
+    assert.ok(a.price > lastPrice, `${id} is not dearer than the aircraft before it`);
+    assert.ok(a.requiresStars >= lastStars, `${id} needs fewer stars than the aircraft before it`);
+    assert.ok(a.tier >= lastTier, `${id} is in a lower class than the aircraft before it`);
+    assert.ok(TIERS.some((t) => t.tier === a.tier), `${id} is in class ${a.tier}, which the store does not sell`);
+    lastPrice = a.price; lastStars = a.requiresStars; lastTier = a.tier;
+  }
+  for (const t of TIERS) {
+    const members = AIRCRAFT_ORDER.filter((id) => AIRCRAFT[id].tier === t.tier);
+    assert.equal(members.length, 2, `class ${t.name} holds ${members.length} aircraft`);
+  }
+  assert.equal(AIRCRAFT_ORDER.length, 10, 'the catalogue is not ten aircraft');
+});
+
+test('every class is a real step up from the one below', () => {
+  // A side-grade inside a class is fine. A class that does not beat the one below it
+  // would make the money pointless.
+  for (let t = 2; t <= TIERS.length; t++) {
+    const below = AIRCRAFT_ORDER.filter((id) => AIRCRAFT[id].tier === t - 1).map((id) => AIRCRAFT[id]);
+    const here = AIRCRAFT_ORDER.filter((id) => AIRCRAFT[id].tier === t).map((id) => AIRCRAFT[id]);
+    const slowestHere = Math.min(...here.map((a) => a.maxSpeed));
+    const fastestBelow = Math.max(...below.map((a) => a.maxSpeed));
+    assert.ok(slowestHere > fastestBelow * 1.04,
+      `class ${t} tops out at ${slowestHere} against ${fastestBelow} in class ${t - 1}`);
+  }
+});
+
+test('each class is affordable by the time it unlocks', () => {
+  // The gate that matters is not the total: it is whether the money is there when the
+  // game says you may buy. For each class, three-starring everything open at its star
+  // gate has to cover the cheaper of its two aircraft - otherwise the store dangles
+  // something the campaign never pays for (§49).
+  for (const t of TIERS) {
+    const cheapest = AIRCRAFT_ORDER
+      .filter((id) => AIRCRAFT[id].tier === t.tier)
+      .map((id) => AIRCRAFT[id])
+      .sort((a, b) => a.price - b.price)[0];
+    const earnable = MISSIONS
+      .filter((m) => (m.unlock?.stars ?? 0) <= cheapest.requiresStars)
+      .reduce((sum, m) => sum + m.rewards.credits * 2 + Math.round(m.rewards.credits * 0.5), 0);
+    assert.ok(earnable >= cheapest.price,
+      `${cheapest.id} costs ${cheapest.price} but only ${earnable} is earnable by ${cheapest.requiresStars} stars`);
+  }
+});
+
+test('the flagship stays out of reach of one clean campaign', () => {
+  // The opposite failure: nothing left to want. The dearest aircraft is deliberately
+  // more than a single three-starred run pays for, beacons included (§151).
+  const campaign = MISSIONS.reduce((sum, m) =>
+    sum + m.rewards.credits * 2 + Math.round(m.rewards.credits * 0.5), 0) + SECRETS.length * SECRET_REWARD.credits;
+  const dearest = Math.max(...AIRCRAFT_ORDER.map((id) => AIRCRAFT[id].price));
+  assert.ok(dearest > campaign * 0.9,
+    `the dearest aircraft costs ${dearest} against ${campaign} of campaign money`);
 });
 
 test('applyUpgrades never mutates the catalogue', () => {

@@ -13,10 +13,16 @@
  *  inertia       how much old velocity survives a heading change (drift feel)
  *  mass          perceived weight: camera lag, sink recovery, impact severity
  *  turboSpeedGain how far past maxSpeed the drag wall moves while boosting
+ *
+ * Two fields are structure rather than physics: `tier` groups the roster into the five
+ * classes the store sells, and `price`/`requiresStars` gate them. Within a tier the two
+ * aircraft are side-grades - one is easier to fly, the other is faster - and each tier
+ * is a clear step up from the one below it. That is what tests/content.test.js pins.
  */
 export const AIRCRAFT = {
   skylark: {
     id: 'skylark',
+    tier: 1,
     name: 'SKYLARK LS-2',
     role: 'LIGHT SPORT · TRAINER',
     blurb:
@@ -54,11 +60,12 @@ export const AIRCRAFT = {
 
   vector: {
     id: 'vector',
+    tier: 2,
     name: 'VECTOR S7',
     role: 'AEROBATIC SPORT',
     blurb:
       'Built to roll. Snaps into a bank faster than anything else in the hangar, and will happily snap back out again if you are careless with the stick.',
-    price: 18000,
+    price: 11000,
     requiresStars: 6,
     thrust: 35,
     maxSpeed: 129,
@@ -91,6 +98,7 @@ export const AIRCRAFT = {
 
   talon: {
     id: 'talon',
+    tier: 3,
     name: 'TALON AX-9',
     role: 'JET TRAINER',
     blurb:
@@ -98,7 +106,7 @@ export const AIRCRAFT = {
     price: 52000,
     requiresStars: 18,
     thrust: 45,
-    maxSpeed: 169,
+    maxSpeed: 172,
     stallSpeed: 43,
     pitchRate: 1.22,
     rollRate: 3.2,
@@ -128,6 +136,7 @@ export const AIRCRAFT = {
 
   meridian: {
     id: 'meridian',
+    tier: 4,
     name: 'MERIDIAN EX',
     role: 'EXECUTIVE · HIGH SPEED CRUISE',
     blurb:
@@ -165,6 +174,7 @@ export const AIRCRAFT = {
 
   wraith: {
     id: 'wraith',
+    tier: 5,
     name: 'WRAITH X-1',
     role: 'EXPERIMENTAL DELTA',
     blurb:
@@ -199,9 +209,210 @@ export const AIRCRAFT = {
       gear: 'retract',
     },
   },
+
+  kestrel: {
+    id: 'kestrel',
+    name: 'KESTREL K-3',
+    role: 'SHORT FIELD · BUSH',
+    tier: 1,
+    blurb:
+      'Flies slower than anything else here and lands almost anywhere. Huge wing, fat tyres, and a hull that shrugs off the kind of contact that ends other flights.',
+    price: 7500,
+    requiresStars: 2,
+    thrust: 25,
+    maxSpeed: 99,
+    stallSpeed: 19,
+    pitchRate: 1.2,
+    rollRate: 2.0,
+    yawRate: 0.62,
+    turnGain: 1.3,
+    stability: 0.93,
+    responsiveness: 7,
+    inertia: 0.18,
+    brakeStrength: 26,
+    turboMult: 1.45,
+    turboSpeedGain: 1.14,
+    turboCapacity: 95,
+    turboDrain: 24,
+    turboRegen: 17,
+    turboDelay: 1,
+    armor: 1.35,
+    mass: 0.6,
+    liftBonus: 0.2,
+    rotateSpeed: 26,
+    landingSpeed: 34,
+    model: {
+      wingspan: 11.2, length: 7.2, wing: 'straight', tail: 'conventional',
+      engines: 'prop', propRadius: 1.05, colorAccent: 0x7bd66a, canopy: 'bubble',
+      gear: 'fixed',
+    },
+  },
+
+  zephyr: {
+    id: 'zephyr',
+    name: 'ZEPHYR RX',
+    role: 'RACING · CLIPPED WING',
+    tier: 2,
+    blurb:
+      'A pylon racer with the wings cut down and the engine wound up. Quicker than the Vector in a straight line and far less forgiving when it runs out of speed.',
+    price: 26000,
+    requiresStars: 10,
+    thrust: 39,
+    maxSpeed: 138,
+    stallSpeed: 38,
+    pitchRate: 1.25,
+    rollRate: 3.1,
+    yawRate: 0.5,
+    turnGain: 1.12,
+    stability: 0.52,
+    responsiveness: 10.5,
+    inertia: 0.38,
+    brakeStrength: 22,
+    turboMult: 1.74,
+    turboSpeedGain: 1.22,
+    turboCapacity: 100,
+    turboDrain: 30,
+    turboRegen: 15,
+    turboDelay: 0.95,
+    armor: 0.88,
+    mass: 0.72,
+    liftBonus: 0.02,
+    rotateSpeed: 44,
+    landingSpeed: 58,
+    model: {
+      wingspan: 7.4, length: 7.8, wing: 'tapered', tail: 'conventional',
+      engines: 'prop', propRadius: 1.15, colorAccent: 0xff4d6d, canopy: 'fighter',
+      gear: 'retract',
+    },
+  },
+
+  nomad: {
+    id: 'nomad',
+    name: 'NOMAD C-4',
+    role: 'HEAVY LIFT · TWIN TURBOPROP',
+    tier: 3,
+    blurb:
+      'Two big propellers and a hull built for weather. It will not out-turn anything, but a storm that throws the light aircraft across the sky barely moves it.',
+    price: 44000,
+    requiresStars: 16,
+    thrust: 33,
+    maxSpeed: 162,
+    stallSpeed: 44,
+    pitchRate: 0.8,
+    rollRate: 1.7,
+    yawRate: 0.38,
+    turnGain: 0.92,
+    stability: 0.95,
+    responsiveness: 5.5,
+    inertia: 0.66,
+    brakeStrength: 21,
+    turboMult: 1.5,
+    turboSpeedGain: 1.15,
+    turboCapacity: 145,
+    turboDrain: 20,
+    turboRegen: 14,
+    turboDelay: 1.5,
+    armor: 1.45,
+    mass: 1.4,
+    liftBonus: 0.1,
+    rotateSpeed: 50,
+    landingSpeed: 62,
+    model: {
+      wingspan: 17.2, length: 15, wing: 'straight', tail: 't-tail',
+      engines: 'prop', propCount: 2, propRadius: 1.45, colorAccent: 0xd9a441,
+      canopy: 'airliner', gear: 'retract',
+    },
+  },
+
+  sabre: {
+    id: 'sabre',
+    name: 'SABRE F-11',
+    role: 'INTERCEPTOR',
+    tier: 4,
+    blurb:
+      'Point defence, and it shows: it climbs, it turns and it burns through a turbo tank in seconds. Fast where the Meridian is merely quick, and thin where the Meridian is solid.',
+    price: 118000,
+    requiresStars: 38,
+    thrust: 54,
+    maxSpeed: 214,
+    stallSpeed: 55,
+    pitchRate: 1.45,
+    rollRate: 4,
+    yawRate: 0.58,
+    turnGain: 1.35,
+    stability: 0.45,
+    responsiveness: 12,
+    inertia: 0.44,
+    brakeStrength: 28,
+    turboMult: 2,
+    turboSpeedGain: 1.28,
+    turboCapacity: 105,
+    turboDrain: 36,
+    turboRegen: 11,
+    turboDelay: 1.25,
+    armor: 0.8,
+    mass: 1,
+    liftBonus: 0.01,
+    rotateSpeed: 60,
+    landingSpeed: 72,
+    model: {
+      wingspan: 10.2, length: 13.6, wing: 'swept', tail: 'conventional',
+      engines: 'jet', jetCount: 1, colorAccent: 0xff7a1a, canopy: 'fighter',
+      gear: 'retract',
+    },
+  },
+
+  aurora: {
+    id: 'aurora',
+    name: 'AURORA HX',
+    role: 'HIGH SPEED RESEARCH',
+    tier: 5,
+    blurb:
+      'The fastest thing anyone has flown over this city, and it needs most of the city to turn around. Straight lines are free; corners have to be planned two gates ahead.',
+    price: 215000,
+    requiresStars: 60,
+    thrust: 64,
+    maxSpeed: 262,
+    stallSpeed: 66,
+    pitchRate: 0.95,
+    rollRate: 2.6,
+    yawRate: 0.34,
+    turnGain: 0.9,
+    stability: 0.5,
+    responsiveness: 8,
+    inertia: 0.72,
+    brakeStrength: 24,
+    turboMult: 2.2,
+    turboSpeedGain: 1.34,
+    turboCapacity: 160,
+    turboDrain: 26,
+    turboRegen: 10,
+    turboDelay: 1.6,
+    armor: 0.78,
+    mass: 1.15,
+    liftBonus: 0,
+    rotateSpeed: 74,
+    landingSpeed: 88,
+    model: {
+      wingspan: 12.6, length: 18.4, wing: 'delta', tail: 'canard',
+      engines: 'jet', jetCount: 2, colorAccent: 0x9cffd9, canopy: 'fighter',
+      gear: 'retract',
+    },
+  },
 };
 
-export const AIRCRAFT_ORDER = ['skylark', 'vector', 'talon', 'meridian', 'wraith'];
+export const AIRCRAFT_ORDER = ['skylark', 'kestrel', 'vector', 'zephyr', 'nomad',
+  'talon', 'meridian', 'sabre', 'wraith', 'aurora'];
+
+/** The five classes the store sells, cheapest first. Two aircraft in each. */
+export const TIERS = [
+  { tier: 1, name: 'TRAINERS', desc: 'Slow, honest and hard to hurt. Where everyone starts.' },
+  { tier: 2, name: 'SPORT', desc: 'Light, quick and sharp enough to punish a lazy hand.' },
+  { tier: 3, name: 'WORKING AIRCRAFT', desc: 'Real speed and real weight. The first aircraft that carry energy.' },
+  { tier: 4, name: 'HIGH SPEED', desc: 'Fast enough that corners have to be planned in advance.' },
+  { tier: 5, name: 'EXPERIMENTAL', desc: 'Prototypes. Enormous performance, no margin for error.' },
+];
+
 
 /** Rival aircraft are drawn from the same catalogue — the AI gets no secret stats. */
 export function getAircraft(id) {
@@ -214,7 +425,7 @@ export function statBars(spec) {
   return [
     { key: 'TOP SPEED', value: norm(spec.maxSpeed, 80, 240), display: `${Math.round(spec.maxSpeed * 3.6)} km/h` },
     { key: 'ACCELERATION', value: norm(spec.thrust, 20, 62), display: `${spec.thrust.toFixed(0)} m/s²` },
-    { key: 'AGILITY', value: norm(spec.rollRate * spec.turnGain, 2.2, 6.2), display: `${(spec.rollRate).toFixed(1)} rad/s` },
+    { key: 'AGILITY', value: norm(spec.rollRate * spec.turnGain, 2.2, 6.2), display: `${Math.round(spec.rollRate * 57.3)} °/s` },
     { key: 'STABILITY', value: norm(spec.stability, 0.3, 0.95), display: `${Math.round(spec.stability * 100)}%` },
     { key: 'TURBO', value: norm(spec.turboMult, 1.4, 2.15), display: `×${spec.turboMult.toFixed(2)}` },
     { key: 'HULL', value: norm(spec.armor, 0.7, 1.35), display: `${Math.round(spec.armor * 100)}%` },

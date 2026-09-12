@@ -1,6 +1,6 @@
 import { formatNumber, formatTime } from '../core/MathUtils.js';
 import { MISSIONS, MISSION_BY_ID } from '../data/missions.js';
-import { AIRCRAFT, AIRCRAFT_ORDER, statBars } from '../data/aircraft.js';
+import { AIRCRAFT, AIRCRAFT_ORDER, TIERS, statBars } from '../data/aircraft.js';
 import { REGIONS, REGION_ORDER } from '../data/regions.js';
 import { PAINTS, PAINT_ORDER, UPGRADE_TREE, UPGRADE_ORDER, applyUpgrades, upgradeCost } from '../data/upgrades.js';
 import { weatherLabel } from '../data/weather.js';
@@ -17,7 +17,7 @@ import { QUALITY_PRESETS } from '../core/Settings.js';
  * appears in the map screen without touching this file (§92).
  */
 const SCREENS = ['loading', 'main', 'map', 'hangar', 'stats', 'settings', 'results', 'pause',
-  'briefing', 'freeflight', 'champion'];
+  'briefing', 'freeflight', 'champion', 'store'];
 
 export class UIManager {
   constructor({ bus, settings, progression, hangar, input }) {
@@ -33,6 +33,7 @@ export class UIManager {
     this.selectedMission = null;
     this.selectedRegion = 'central';
     this.selectedAircraft = progression.data.activeAircraft;
+    this.storeAircraft = progression.data.activeAircraft;
     this.hangarTab = 'upgrades';
     this.settingsReturn = 'main';
     // Free flight setup, remembered between visits within a session.
@@ -78,6 +79,9 @@ export class UIManager {
       championLine: document.getElementById('champion-line'),
       championRows: document.getElementById('champion-rows'),
       championUnlocks: document.getElementById('champion-unlocks'),
+      storeCredits: document.getElementById('store-credits'),
+      storeList: document.getElementById('store-list'),
+      storeDetail: document.getElementById('store-detail'),
       fade: document.getElementById('fade'),
       fps: document.getElementById('fps'),
     };
@@ -372,6 +376,114 @@ export class UIManager {
     }
 
     this.hangar.setAircraft(upgraded, currentPaint);
+  }
+
+  // ----------------------------------------------------------------- the store
+  /**
+   * Ten aircraft in five classes, with the numbers the flight model actually reads
+   * (spec §56). Every row below is a field of the spec, converted to a unit a pilot
+   * would use - nothing here is decoration, and nothing the aircraft does is hidden.
+   */
+  _specSheet(a) {
+    const kmh = (v) => `${Math.round(v * 3.6)} km/h`;
+    const deg = (v) => `${Math.round(v * 57.3)} °/s`;
+    const pct = (v) => `${Math.round(v * 100)}%`;
+    return [
+      ['PERFORMANCE', [
+        ['Top speed', kmh(a.maxSpeed)],
+        ['Top speed on turbo', kmh(a.maxSpeed * a.turboSpeedGain)],
+        ['Acceleration', `${a.thrust.toFixed(0)} m/s²`],
+        ['Weight', `${Math.round(a.mass * 1000)} kg`],
+        ['Extra lift', pct(a.liftBonus)],
+      ]],
+      ['HANDLING', [
+        ['Roll rate', deg(a.rollRate)],
+        ['Pitch rate', deg(a.pitchRate)],
+        ['Rudder', deg(a.yawRate)],
+        ['Turn tightness', `×${a.turnGain.toFixed(2)}`],
+        ['Stability', pct(a.stability)],
+        ['Control response', `${a.responsiveness.toFixed(1)}`],
+        ['Momentum carried', pct(a.inertia)],
+        ['Airbrake', `${a.brakeStrength.toFixed(0)}`],
+      ]],
+      ['LOW SPEED', [
+        ['Stall speed', kmh(a.stallSpeed)],
+        ['Rotate speed', kmh(a.rotateSpeed)],
+        ['Landing speed', kmh(a.landingSpeed)],
+      ]],
+      ['TURBO AND HULL', [
+        ['Boost', `×${a.turboMult.toFixed(2)}`],
+        ['Tank', `${(a.turboCapacity / a.turboDrain).toFixed(1)} s of boost`],
+        ['Recharge', `${(a.turboCapacity / a.turboRegen).toFixed(1)} s to full`],
+        ['Hull strength', pct(a.armor)],
+      ]],
+    ];
+  }
+
+  renderStore() {
+    const p = this.progression;
+    if (!AIRCRAFT[this.storeAircraft]) this.storeAircraft = p.data.activeAircraft;
+    this.el.storeCredits.innerHTML =
+      `<b>${formatNumber(p.credits)}</b> CR · ${p.totalStars}/${p.maxStars} ★ · ${p.data.ownedAircraft.length}/${AIRCRAFT_ORDER.length} OWNED`;
+
+    this.el.storeList.innerHTML = TIERS.map((t) => {
+      const members = AIRCRAFT_ORDER.filter((id) => AIRCRAFT[id].tier === t.tier);
+      return `<div class="store-class">
+        <div class="sc-head"><span class="sc-name">CLASS ${t.tier} · ${t.name}</span>
+          <span class="sc-desc">${t.desc}</span></div>
+        ${members.map((id) => {
+          const st = p.aircraftStatus(id);
+          const active = p.data.activeAircraft === id;
+          const state = active ? 'FLYING' : st.owned ? 'OWNED'
+            : !st.starsOk ? `${st.shortfall} ★ MORE` : `${formatNumber(st.price)} CR`;
+          const cls = [
+            'store-card',
+            id === this.storeAircraft ? 'selected' : '',
+            st.owned ? 'owned' : '',
+            !st.owned && !st.starsOk ? 'locked' : '',
+            !st.owned && st.starsOk && !st.affordable ? 'dear' : '',
+          ].filter(Boolean).join(' ');
+          return `<div class="${cls}" data-action="storeSelect" data-aircraft="${id}">
+            <div class="sc-title">${AIRCRAFT[id].name}</div>
+            <div class="sc-role">${AIRCRAFT[id].role}</div>
+            <div class="sc-foot"><span>${Math.round(AIRCRAFT[id].maxSpeed * 3.6)} km/h</span>
+              <span class="sc-state">${state}</span></div>
+          </div>`;
+        }).join('')}
+      </div>`;
+    }).join('');
+
+    const id = this.storeAircraft;
+    const a = AIRCRAFT[id];
+    const st = p.aircraftStatus(id);
+    const bars = statBars(a);
+    const active = p.data.activeAircraft === id;
+    const action = active
+      ? { label: 'CURRENTLY FLYING', act: 'noop', disabled: true }
+      : st.owned ? { label: 'FLY THIS ONE', act: 'selectAircraft', disabled: false }
+      : !st.starsOk ? { label: `NEEDS ${a.requiresStars} ★`, act: 'noop', disabled: true }
+      : !st.affordable ? { label: `${formatNumber(a.price)} CR — SHORT ${formatNumber(a.price - p.credits)}`, act: 'noop', disabled: true }
+      : { label: `BUY — ${formatNumber(a.price)} CR`, act: 'buyStoreAircraft', disabled: false };
+
+    this.el.storeDetail.innerHTML = `
+      <div class="sd-head">
+        <h3>${a.name}</h3>
+        <div class="sd-role">CLASS ${a.tier} · ${a.role}</div>
+      </div>
+      <p class="sd-blurb">${a.blurb}</p>
+      <div class="sd-bars">${bars.map((b) => `
+        <div class="stat-line"><span class="stat-name">${b.key}</span>
+          <span class="stat-track"><span class="stat-val" style="width:${(b.value * 100).toFixed(0)}%"></span></span>
+          <span class="stat-num">${b.display}</span></div>`).join('')}</div>
+      <div class="sd-sheet">${this._specSheet(a).map(([group, rows]) => `
+        <div class="sd-group"><h4>${group}</h4>
+          ${rows.map(([k, v]) => `<div class="sd-row"><span>${k}</span><span>${v}</span></div>`).join('')}
+        </div>`).join('')}</div>
+      <div class="sd-actions">
+        <button class="menu-btn primary" data-action="${action.act}" data-aircraft="${id}"
+          ${action.disabled ? 'disabled' : ''}>${action.label}</button>
+        <button class="menu-btn" data-action="hangar">HANGAR</button>
+      </div>`;
   }
 
   // ------------------------------------------------------------- free flight
