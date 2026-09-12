@@ -117,6 +117,20 @@ as a neighbourhood rather than as one house per city block.
 Streets are painted in the terrain shader rather than built as geometry — zero extra
 triangles for 80 square kilometres of road, and they follow the ground exactly.
 
+Everything a building wears is drawn in its shader rather than built: floor slabs, window
+mullions and sills, spandrel panels, corner pilasters, shopfronts at street level,
+mechanical floors, dirt washing down from the sills, roof gravel and parapets. None of it
+costs a triangle, which is the only reason three thousand buildings can afford this much
+detail. The pattern fades back into flat wall as the bays shrink on screen, so a distant
+skyline reads as concrete rather than crawling speckle. Roofs carry plant — air handling
+units, water tanks, stair heads and masts — on the buildings tall enough to be flown past,
+and a mast is solid enough to hit.
+
+Traffic is built the same way: each vehicle class is a body, a cabin, glazing, lamps and
+six or four wheels merged into one geometry, so a bus still costs a single instanced draw
+call. One material paints all of it, and a part code per vertex is what keeps a tyre black
+when the car is red, darkens the glass, and brings the headlights up at dusk.
+
 Eleven landmarks exist to navigate by: Skyline Tower, the Obelisk, Ridgeway Stadium,
 Northgate Bridge, the Skyline Wheel, the container quay, Valley Dam, the control tower,
 South Marina, Central Park and Ridge Pass. Several carry deliberate flyable gaps — the
@@ -188,9 +202,9 @@ adding an entry.
 - Particles are pooled and recycled; nothing allocates mid-flight.
 - If the frame rate sits low, internal resolution drops before anything else.
 
-Measured on the build in this repository: about 77,000 triangles for the city itself and
-around 200,000 for a typical view including terrain, landmarks and traffic, in roughly 100
-draw calls, with world updates at about 0.3 ms per frame.
+Measured on the build in this repository: about 107,000 triangles for the city itself at
+the highest detail setting, 69,000 at medium and 39,000 at low, and around 350,000 for a
+low pass over downtown including terrain, landmarks and traffic, in under 80 draw calls.
 
 ## Tests
 

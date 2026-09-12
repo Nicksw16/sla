@@ -157,6 +157,7 @@ export class WorldManager {
     const tod = this.timeOfDay;
     const wx = this.weather;
     const night = tod.night;
+    this.traffic.setNight(night);
 
     // --- sky uniforms follow the lighting rig and the cloud deck
     const su = this.sky.userData.uniforms;
@@ -185,6 +186,10 @@ export class WorldManager {
     // --- night: city windows and street lights
     if (this.city.userData.facadeUniforms) {
       this.city.userData.facadeUniforms.uNight.value = night;
+      // Daylight bounce onto the walls, cut back at night so the lit windows carry
+      // the contrast instead of competing with a grey wash.
+      this.city.userData.facadeUniforms.uFill.value =
+        0.34 * (1 - night) * (0.55 + 0.45 * wx.current.visibility) + 0.035 * night;
     }
     if (this.terrain.userData.uniforms) {
       this.terrain.userData.uniforms.uNight.value = night;

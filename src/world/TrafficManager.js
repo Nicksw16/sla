@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { damp } from '../core/MathUtils.js';
 import { Rng } from '../core/Rng.js';
 import { PERIOD } from './CityGenerator.js';
@@ -20,12 +21,112 @@ import { RUNWAY } from '../data/regions.js';
 
 const GROUND_RADIUS = 1250;
 
+/**
+ * Vehicles.
+ *
+ * Each class is a handful of primitives merged into a single geometry, so a bus with
+ * six wheels and a window band still costs one instanced draw call for the whole city.
+ * Every vertex carries a part code, which is what lets one material paint a tyre black,
+ * a window dark, and a headlight bright while the instance colour only ever touches
+ * the bodywork.
+ */
+const PART = { BODY: 0, GLASS: 1, HEAD: 2, TAIL: 3, TYRE: 4, TRIM: 5 };
+
+function tagged(geo, code, { x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0 } = {}) {
+  if (rx || ry || rz) geo.rotateX(rx), geo.rotateY(ry), geo.rotateZ(rz);
+  geo.translate(x, y, z);
+  const n = geo.attributes.position.count;
+  geo.setAttribute('aPart', new THREE.BufferAttribute(new Float32Array(n).fill(code), 1));
+  return geo;
+}
+
+/** Four wheels at the corners of a wheelbase, or six for the longer classes. */
+function wheels(radius, width, halfTrack, positions) {
+  return positions.map((z) => [1, -1].map((side) => tagged(
+    new THREE.CylinderGeometry(radius, radius, width, 6),
+    PART.TYRE,
+    { x: side * halfTrack, y: radius, z, rz: Math.PI / 2 },
+  ))).flat();
+}
+
+function carGeometry() {
+  const parts = [
+    tagged(new THREE.BoxGeometry(1.94, 0.66, 4.3), PART.BODY, { y: 0.66 }),
+    tagged(new THREE.BoxGeometry(1.74, 0.58, 2.2), PART.BODY, { y: 1.26, z: 0.1 }),
+    tagged(new THREE.BoxGeometry(1.78, 0.4, 2.06), PART.GLASS, { y: 1.3, z: 0.1 }),
+    tagged(new THREE.BoxGeometry(1.3, 0.16, 0.1), PART.HEAD, { y: 0.78, z: -2.16 }),
+    tagged(new THREE.BoxGeometry(1.3, 0.16, 0.1), PART.TAIL, { y: 0.82, z: 2.16 }),
+    ...wheels(0.33, 0.24, 0.92, [-1.42, 1.42]),
+  ];
+  return mergeGeometries(parts, false);
+}
+
+function busGeometry() {
+  const parts = [
+    tagged(new THREE.BoxGeometry(2.5, 2.5, 11.4), PART.BODY, { y: 1.7 }),
+    tagged(new THREE.BoxGeometry(2.3, 0.3, 10.8), PART.TRIM, { y: 3.02 }),
+    tagged(new THREE.BoxGeometry(2.54, 0.92, 9.6), PART.GLASS, { y: 2.4 }),
+    tagged(new THREE.BoxGeometry(2.2, 0.9, 0.1), PART.GLASS, { y: 2.4, z: -5.72 }),
+    tagged(new THREE.BoxGeometry(1.7, 0.2, 0.1), PART.HEAD, { y: 1.0, z: -5.72 }),
+    tagged(new THREE.BoxGeometry(1.7, 0.2, 0.1), PART.TAIL, { y: 1.1, z: 5.72 }),
+    ...wheels(0.52, 0.3, 1.14, [-3.9, 3.1, 4.3]),
+  ];
+  return mergeGeometries(parts, false);
+}
+
+function truckGeometry() {
+  const parts = [
+    tagged(new THREE.BoxGeometry(2.46, 2.3, 4.4), PART.BODY, { y: 1.7, z: -5.2 }),
+    tagged(new THREE.BoxGeometry(2.5, 0.9, 0.12), PART.GLASS, { y: 2.5, z: -7.36 }),
+    tagged(new THREE.BoxGeometry(2.6, 3.0, 10.2), PART.TRIM, { y: 2.3, z: 2.2 }),
+    tagged(new THREE.BoxGeometry(0.5, 1.6, 0.4), PART.BODY, { x: 1.1, y: 2.6, z: -2.8 }),
+    tagged(new THREE.BoxGeometry(1.6, 0.22, 0.12), PART.HEAD, { y: 0.9, z: -7.42 }),
+    tagged(new THREE.BoxGeometry(2.0, 0.22, 0.12), PART.TAIL, { y: 1.0, z: 7.36 }),
+    ...wheels(0.56, 0.32, 1.12, [-6.1, 4.6, 6.0]),
+  ];
+  return mergeGeometries(parts, false);
+}
+
 function vehicleGeometry() {
-  // One merged mesh per vehicle class, all instanced.
-  const car = new THREE.BoxGeometry(2.0, 1.5, 4.4);
-  const bus = new THREE.BoxGeometry(2.5, 3.1, 11.5);
-  const truck = new THREE.BoxGeometry(2.5, 3.4, 15.5);
-  return { car, bus, truck };
+  return { car: carGeometry(), bus: busGeometry(), truck: truckGeometry() };
+}
+
+/**
+ * One material for every vehicle. The part code decides what each surface is: the
+ * instance colour paints the bodywork only, tyres stay black whatever colour the car
+ * is, glass darkens, and the lamps come on with the city.
+ */
+function vehicleMaterial() {
+  const mat = new THREE.MeshStandardMaterial({ roughness: 0.5, metalness: 0.35 });
+  mat.userData.uniforms = { uNight: { value: 0 } };
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uNight = mat.userData.uniforms.uNight;
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', `#include <common>
+        attribute float aPart;
+        varying float vPart;`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+        vPart = aPart;`);
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>
+        uniform float uNight;
+        varying float vPart;`)
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+        if (vPart > 3.5 && vPart < 4.5) {
+          diffuseColor.rgb = vec3(0.045, 0.048, 0.052);   // tyre
+        } else if (vPart > 0.5 && vPart < 1.5) {
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.05, 0.08, 0.11), 0.82); // glass
+        } else if (vPart > 4.5) {
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.82, 0.84, 0.86), 0.7);  // trim
+        } else if (vPart > 1.5 && vPart < 2.5) {
+          diffuseColor.rgb = vec3(0.85, 0.86, 0.8);
+          totalEmissiveRadiance += vec3(1.0, 0.95, 0.82) * (0.25 + uNight * 2.2);
+        } else if (vPart > 2.5 && vPart < 3.5) {
+          diffuseColor.rgb = vec3(0.32, 0.05, 0.05);
+          totalEmissiveRadiance += vec3(1.0, 0.13, 0.08) * (0.3 + uNight * 1.6);
+        }`);
+  };
+  return mat;
 }
 
 function airlinerGeometry() {
@@ -117,8 +218,10 @@ export class TrafficManager {
       truck: [0xd8dee4, 0x35507a, 0x8a3b2c],
     };
     this.groundMeshes = {};
+    this.vehicleMaterials = [];
     for (const kind of ['car', 'bus', 'truck']) {
-      const mat = new THREE.MeshStandardMaterial({ roughness: 0.55, metalness: 0.35 });
+      const mat = vehicleMaterial();
+      this.vehicleMaterials.push(mat);
       const mesh = new THREE.InstancedMesh(geos[kind], mat, Math.max(1, counts[kind]));
       mesh.name = `traffic:${kind}`;
       mesh.castShadow = false;
@@ -186,6 +289,11 @@ export class TrafficManager {
     v.active = false;
   }
 
+  /** Lamps come on with the city (spec §63). */
+  setNight(night) {
+    for (const mat of this.vehicleMaterials ?? []) mat.userData.uniforms.uNight.value = night;
+  }
+
   update(dt, cameraPosition, elapsed) {
     // --- ground vehicles
     for (const v of this.ground) {
@@ -203,7 +311,8 @@ export class TrafficManager {
         continue;
       }
 
-      const y = terrainHeight(v.x, v.z) + 1;
+      // The geometries stand on their wheels, so the road surface is the origin.
+      const y = terrainHeight(v.x, v.z) + 0.08;
       const heading = v.axis === 0 ? (v.speed > 0 ? Math.PI / 2 : -Math.PI / 2) : (v.speed > 0 ? 0 : Math.PI);
       this._p.set(v.x, y, v.z);
       this._q.setFromAxisAngle(this._up, heading);

@@ -206,6 +206,11 @@ function groundMaterial(urbanTexture, period, roadWidth) {
         uniform float uNight;
         uniform float uPeriod;
         uniform float uRoad;
+        float hashT(vec2 p) {
+          vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+          p3 += dot(p3, p3.yzx + 33.33);
+          return fract((p3.x + p3.y) * p3.z);
+        }
         varying float vHeight;
         varying float vSlope;
         varying vec2 vWorldXZ;`)
@@ -241,11 +246,44 @@ function groundMaterial(urbanTexture, period, roadWidth) {
           c = mix(c, kerb, clamp(sidewalk, 0.0, 1.0) * urban);
           c = mix(c, asphalt, paved * urban);
 
+          // --- road markings. All of it is one more step on a coordinate that is
+          // already here, so a city of painted streets gets its lane lines for free.
+          // Detail fades out as a metre shrinks below a pixel, or the markings crawl.
+          float mpx = fwidth(vWorldXZ.x) + fwidth(vWorldXZ.y);
+          float sharp = 1.0 - smoothstep(0.5, 2.2, mpx);
+
+          // Kerb line where the pavement meets the road.
+          float kerbEdge = (1.0 - smoothstep(0.0, 0.9, abs(min(gd.x, gd.y) - uRoad * 0.5))) * urban * sharp;
+          c = mix(c, vec3(0.62, 0.62, 0.60), kerbEdge * 0.8);
+
+          // Dashed lane divider down the side streets, solid line on the avenues.
+          vec2 along = vWorldXZ;
+          float dashX = step(0.5, fract(along.y / 9.0)) * (1.0 - smoothstep(0.35, 0.75, gd.x));
+          float dashZ = step(0.5, fract(along.x / 9.0)) * (1.0 - smoothstep(0.35, 0.75, gd.y));
+          float dash = max(dashX, dashZ) * street * urban * sharp;
+          c = mix(c, vec3(0.78, 0.78, 0.72), dash * 0.75);
+
           // Centre line on the avenues only, so it reads as a main road.
           float centre = (1.0 - smoothstep(0.7, 1.1, min(ad.x, ad.y))) * avenue * urban;
           c = mix(c, vec3(0.72, 0.62, 0.22), centre);
-          // Sodium street lighting after dark.
-          totalEmissiveRadiance += vec3(1.0, 0.72, 0.34) * paved * urban * uNight * 0.24;
+
+          // Zebra crossings on the approach to each junction.
+          vec2 jd = gd;
+          float nearJunction = (1.0 - smoothstep(uRoad * 0.55, uRoad * 0.8, max(jd.x, jd.y)));
+          float zebraX = step(0.55, fract(along.x / 1.6)) * (1.0 - smoothstep(uRoad * 0.42, uRoad * 0.5, jd.y));
+          float zebraZ = step(0.55, fract(along.y / 1.6)) * (1.0 - smoothstep(uRoad * 0.42, uRoad * 0.5, jd.x));
+          float zebra = max(zebraX, zebraZ) * nearJunction * paved * urban * sharp;
+          c = mix(c, vec3(0.82, 0.82, 0.78), zebra * 0.7);
+
+          // Manhole covers and patched repairs, so the asphalt is not one flat tone.
+          float patch = hashT(floor(along / 7.0));
+          c *= 1.0 - paved * urban * sharp * 0.10 * step(0.72, patch);
+
+          // Sodium street lighting after dark, pooled under the lamps rather than even.
+          float lampX = 1.0 - smoothstep(0.0, 5.0, abs(mod(along.x, 32.0) - 16.0));
+          float lampZ = 1.0 - smoothstep(0.0, 5.0, abs(mod(along.y, 32.0) - 16.0));
+          float pools = mix(0.55, 1.0, max(lampX, lampZ) * sharp);
+          totalEmissiveRadiance += vec3(1.0, 0.72, 0.34) * paved * urban * uNight * 0.24 * pools;
         }
 
         // Central Park: a green void in the middle of the densest district (§25).

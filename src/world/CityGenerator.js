@@ -23,7 +23,19 @@ export const BLOCK = 112;
 export const ROAD = 36;
 export const PERIOD = BLOCK + ROAD;
 
-/** Procedural facade material: windows in the shader, lit on demand at night. */
+/**
+ * Procedural facade material.
+ *
+ * Everything a building wears is drawn here rather than built: floor slabs, window
+ * mullions, spandrel panels, corner pilasters, shopfronts at street level, mechanical
+ * floors, roof gravel and parapets, dirt down the walls, and the lights coming on
+ * floor by floor at night. None of it costs a triangle, which is the only reason a
+ * city of three thousand buildings can afford this much detail (spec §89).
+ *
+ * Per instance the shader is told: the size of the mass in metres (so windows are the
+ * same size on a shed and a tower), how glassy the district is, which style of
+ * building it is, and whether this mass is the one standing on the ground.
+ */
 function facadeMaterial() {
   const mat = new THREE.MeshStandardMaterial({
     color: 0xffffff, roughness: 0.72, metalness: 0.12, vertexColors: false,
@@ -31,57 +43,162 @@ function facadeMaterial() {
   mat.userData.uniforms = {
     uNight: { value: 0 },
     uWindowWarm: { value: new THREE.Color(0xffd49a) },
+    uWindowCool: { value: new THREE.Color(0xcfe6ff) },
+    // Bounce light onto vertical faces. Without it the shadowed side of every tower
+    // is a black slab and none of the detail below survives to be seen.
+    uFill: { value: 0.3 },
   };
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.uNight = mat.userData.uniforms.uNight;
     shader.uniforms.uWindowWarm = mat.userData.uniforms.uWindowWarm;
+    shader.uniforms.uWindowCool = mat.userData.uniforms.uWindowCool;
+    shader.uniforms.uFill = mat.userData.uniforms.uFill;
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', `#include <common>
         attribute float aSeed;
         attribute vec3 aSize;
         attribute float aGlass;
+        attribute float aStyle;
+        attribute float aGround;
         varying vec3 vLocal;
+        varying vec3 vSize;
         varying float vSeed;
         varying float vGlass;
+        varying float vStyle;
+        varying float vGround;
         varying vec3 vFaceNormal;`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>
         vLocal = position * aSize;
+        vSize = aSize;
         vSeed = aSeed;
         vGlass = aGlass;
+        vStyle = aStyle;
+        vGround = aGround;
         vFaceNormal = normal;`);
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>
         uniform float uNight;
         uniform vec3 uWindowWarm;
+        uniform vec3 uWindowCool;
+        uniform float uFill;
         varying vec3 vLocal;
+        varying vec3 vSize;
         varying float vSeed;
         varying float vGlass;
+        varying float vStyle;
+        varying float vGround;
         varying vec3 vFaceNormal;
         float hash12(vec2 p) {
           vec3 p3 = fract(vec3(p.xyx) * 0.1031);
           p3 += dot(p3, p3.yzx + 33.33);
           return fract((p3.x + p3.y) * p3.z);
+        }
+        // A band that is 1 inside a stripe of the given width, with soft edges.
+        float stripe(float v, float width, float soft) {
+          return smoothstep(width + soft, width, abs(v));
         }`)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
         vec3 an = abs(vFaceNormal);
+        float heightAboveBase = vLocal.y + vSize.y * 0.5;
+
         if (an.y < 0.5) {
-          // Pick the facade plane, then lay a window grid on it in metres so the
-          // windows are the same size on a 20 m shed and a 300 m tower.
-          vec2 uvw = an.x > an.z ? vec2(vLocal.z, vLocal.y) : vec2(vLocal.x, vLocal.y);
-          vec2 cellSize = vec2(4.2, 3.7);
-          vec2 cell = floor(uvw / cellSize);
-          vec2 f = fract(uvw / cellSize);
-          float frame = step(0.16, f.x) * step(f.x, 0.84) * step(0.2, f.y) * step(f.y, 0.8);
-          float r = hash12(cell + vec2(vSeed * 37.0, vSeed * 91.0));
-          // Slight vertical banding so floors read as floors.
-          diffuseColor.rgb *= 0.92 + 0.08 * hash12(vec2(cell.y, vSeed));
-          diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 0.55, frame * vGlass);
-          float lit = step(0.52, r) * uNight * frame;
-          totalEmissiveRadiance += uWindowWarm * lit * 1.35;
-          // Daytime glass catches light instead of glowing.
-          diffuseColor.rgb += vGlass * frame * (1.0 - uNight) * 0.06;
+          // --- which facade are we on, and where on it
+          bool facingX = an.x > an.z;
+          vec2 uvw = facingX ? vec2(vLocal.z, vLocal.y) : vec2(vLocal.x, vLocal.y);
+          float faceWidth = facingX ? vSize.z : vSize.x;
+
+          // Window grid in metres. Houses get smaller, squarer windows than offices,
+          // and industrial sheds get wide bands.
+          float floorH = mix(3.7, 3.0, step(0.5, vStyle)) ;
+          float bayW = vStyle > 1.5 ? 6.2 : (vStyle > 0.5 ? 3.4 : 4.2);
+          float floorIdx = floor(heightAboveBase / floorH);
+          float bayIdx = floor((uvw.x + faceWidth * 0.5) / bayW);
+          float fy = fract(heightAboveBase / floorH);
+          float fx = fract((uvw.x + faceWidth * 0.5) / bayW);
+
+          // --- structure: floor slab, mullions between bays, a sill under the glass
+          float slab = stripe(fy - 0.06, 0.055, 0.02);
+          float mullion = stripe(fx - 0.5, 0.42, 0.03);
+          float sill = stripe(fy - 0.2, 0.03, 0.015);
+
+          // Glass occupies the middle of each bay, above the sill.
+          float glassPane = step(0.2, fx) * step(fx, 0.8) * step(0.24, fy) * step(fy, 0.9);
+
+          // Every eighth floor or so is plant: solid, louvred, no glass.
+          float mech = step(0.93, hash12(vec2(floorIdx * 0.37, vSeed)));
+          glassPane *= 1.0 - mech;
+
+          // The mass that stands on the ground gets a taller shopfront at street level.
+          float street = vGround * (1.0 - step(5.2, heightAboveBase));
+          float shopGlass = street * step(1.0, heightAboveBase) * step(fx, 0.92) * step(0.08, fx);
+          glassPane = max(glassPane, shopGlass);
+
+          // --- colour
+          // The district palettes were chosen when a facade was one flat colour; with
+          // slabs, mullions and glazing drawn on top they need lifting to keep their
+          // hue instead of reading as shadow.
+          vec3 wall = diffuseColor.rgb * 1.22;
+          // Concrete varies band to band, and columns of cladding vary bay to bay.
+          wall *= 0.93 + 0.09 * hash12(vec2(floorIdx, vSeed * 3.1));
+          wall *= 0.96 + 0.06 * hash12(vec2(bayIdx * 1.7, vSeed));
+          // Corner pilasters: the last half metre of each facade reads as structure.
+          float edge = 1.0 - smoothstep(0.0, 0.6, min(faceWidth * 0.5 - abs(uvw.x), 99.0));
+          wall = mix(wall, wall * 1.12, edge);
+          // Dirt washes down from the sills and pools at the base of the wall.
+          float streak = hash12(vec2(floor(uvw.x * 1.7), vSeed * 7.0));
+          wall *= 1.0 - 0.06 * streak * smoothstep(0.9, 0.1, fy);
+          wall *= mix(0.86, 1.0, smoothstep(0.0, 14.0, heightAboveBase));
+
+          // Glazing reflects the sky rather than swallowing the light, or a tower in
+          // daylight reads as a black slab with a grid on it.
+          // Glass sits a little darker than the concrete around it and picks up the
+          // sky at a glance, rather than reading as a white tile on a dark wall.
+          vec3 glassCol = mix(vec3(0.13, 0.16, 0.20), vec3(0.21, 0.27, 0.33), vGlass);
+          float sheen = pow(1.0 - abs(dot(normalize(vFaceNormal), vec3(0.0, 1.0, 0.0))), 2.0);
+          glassCol += sheen * (1.0 - uNight) * 0.1 * (0.4 + vGlass);
+          glassCol *= mix(1.0, 0.45, uNight);
+
+          // Pattern fade. A window grid a few pixels wide turns into crawling speckle,
+          // so as the bays shrink on screen the detail blends back into flat wall.
+          float px = fwidth(uvw.x / bayW) + fwidth(heightAboveBase / floorH);
+          float near = 1.0 - smoothstep(0.22, 0.85, px);
+
+          vec3 lit_wall = mix(wall, glassCol, glassPane * near);
+          lit_wall *= 1.0 - 0.2 * slab * near * (1.0 - glassPane);
+          lit_wall *= 1.0 - 0.12 * mullion * near * (1.0 - glassPane);
+          lit_wall *= 1.0 - 0.16 * sill * near;
+          lit_wall *= 1.0 - 0.1 * mech * near;
+          // What is left at distance: the average of wall and glass, which is what the
+          // eye sees of a facade from half a kilometre anyway.
+          diffuseColor.rgb = mix(mix(wall, glassCol, 0.42 * (0.5 + vGlass * 0.5)), lit_wall, near);
+
+          // --- night: lights come on in clusters, not at random
+          float floorLife = hash12(vec2(floorIdx * 2.3, vSeed * 5.0));
+          float roomLife = hash12(vec2(bayIdx, floorIdx + vSeed * 13.0));
+          float occupancy = mix(0.62, 0.34, step(0.5, vStyle));
+          float lit = step(occupancy, roomLife * 0.55 + floorLife * 0.45) * glassPane * uNight;
+          // Offices burn cool and even; homes burn warm and patchy.
+          vec3 lampColour = mix(uWindowCool, uWindowWarm, clamp(vStyle + hash12(vec2(bayIdx, floorIdx)) * 0.5, 0.0, 1.0));
+          // Distant towers keep a soft glow instead of dissolving into white noise.
+          totalEmissiveRadiance += lampColour * lit * (0.5 + 0.32 * roomLife) * mix(0.4, 1.0, near);
+          // Shopfronts stay lit after dark and spill onto the pavement.
+          totalEmissiveRadiance += uWindowWarm * shopGlass * uNight * 0.85 * mix(0.4, 1.0, near);
+          // Sky and street bounce, so a facade out of the sun still shows its face.
+          totalEmissiveRadiance += diffuseColor.rgb * uFill;
         } else {
-          diffuseColor.rgb *= 0.82; // roofs are grubbier than facades
+          // --- roof: gravel, a parapet rim, and the odd painted marking
+          vec2 rp = vec2(vLocal.x, vLocal.z);
+          vec2 halfSize = vec2(vSize.x, vSize.z) * 0.5;
+          float toEdge = min(halfSize.x - abs(rp.x), halfSize.y - abs(rp.y));
+          float parapet = 1.0 - smoothstep(0.0, 1.4, toEdge);
+          float gravel = hash12(floor(rp * 1.35) + vSeed);
+          float rpx = fwidth(rp.x) + fwidth(rp.y);
+          diffuseColor.rgb *= 0.8 + 0.1 * gravel * (1.0 - smoothstep(0.4, 1.6, rpx));
+          diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 1.35, parapet);
+          // A red service door / stair head on some roofs.
+          float hut = step(0.86, hash12(vec2(vSeed * 11.0, 3.0))) *
+            step(abs(rp.x + halfSize.x * 0.35), 2.2) * step(abs(rp.y - halfSize.y * 0.3), 1.8);
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.32, 0.16, 0.13), hut);
         }`);
   };
   return mat;
@@ -104,8 +221,8 @@ class InstanceBatch {
     this._s = new THREE.Vector3();
   }
 
-  add(x, y, z, sx, sy, sz, rotY, color, glass = 0) {
-    this.items.push({ x, y, z, sx, sy, sz, rotY, color, glass });
+  add(x, y, z, sx, sy, sz, rotY, color, glass = 0, style = 0, ground = 0) {
+    this.items.push({ x, y, z, sx, sy, sz, rotY, color, glass, style, ground });
   }
 
   build(name) {
@@ -116,6 +233,8 @@ class InstanceBatch {
     const seeds = this.facade ? new Float32Array(n) : null;
     const sizes = this.facade ? new Float32Array(n * 3) : null;
     const glass = this.facade ? new Float32Array(n) : null;
+    const style = this.facade ? new Float32Array(n) : null;
+    const ground = this.facade ? new Float32Array(n) : null;
 
     for (let i = 0; i < n; i++) {
       const it = this.items[i];
@@ -131,6 +250,8 @@ class InstanceBatch {
         sizes[i * 3 + 1] = it.sy;
         sizes[i * 3 + 2] = it.sz;
         glass[i] = it.glass;
+        style[i] = it.style ?? 0;
+        ground[i] = it.ground ?? 0;
       }
     }
     if (this.facade) {
@@ -138,6 +259,8 @@ class InstanceBatch {
       mesh.geometry.setAttribute('aSeed', new THREE.InstancedBufferAttribute(seeds, 1));
       mesh.geometry.setAttribute('aSize', new THREE.InstancedBufferAttribute(sizes, 3));
       mesh.geometry.setAttribute('aGlass', new THREE.InstancedBufferAttribute(glass, 1));
+      mesh.geometry.setAttribute('aStyle', new THREE.InstancedBufferAttribute(style, 1));
+      mesh.geometry.setAttribute('aGround', new THREE.InstancedBufferAttribute(ground, 1));
     }
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
@@ -258,29 +381,79 @@ export class ObstacleGrid {
   }
 }
 
+/**
+ * Rooftop plant: the air handling units, water tanks, stair heads and masts that make
+ * a roof read as a working surface rather than a lid. Instanced with everything else,
+ * and only as many as the quality preset pays for.
+ */
+function addRoofClutter(ctx, { x, z, w, d, top, rot, color, detail, tall }) {
+  const { box, cyl, deco: rng } = ctx;
+  // One or two units, not a rooftop farm. Every one of these is an instance that draws
+  // whether or not the player is near it, so the budget is spent on the roofs most
+  // likely to be flown over rather than spread across every shed in the city.
+  const units = 1 + (rng.bool(0.4 * detail) ? 1 : 0);
+  const dark = color.clone().multiplyScalar(0.62);
+  for (let i = 0; i < units; i++) {
+    const ux = x + rng.range(-w * 0.3, w * 0.3);
+    const uz = z + rng.range(-d * 0.3, d * 0.3);
+    const pick = rng.next();
+    if (pick < 0.55) {
+      // Air handling unit: a low box with a lighter lid.
+      const uw = rng.range(2.4, Math.max(3, w * 0.26));
+      const ud = rng.range(2.2, Math.max(3, d * 0.26));
+      const uh = rng.range(1.4, 2.8);
+      box.add(ux, top + uh / 2, uz, uw, uh, ud, rot, dark, 0);
+      if (detail > 0.9) {
+        box.add(ux, top + uh + 0.18, uz, uw * 0.92, 0.36, ud * 0.92, rot, new THREE.Color(0x9aa3ad), 0);
+      }
+    } else if (pick < 0.82) {
+      // Water tank on short legs.
+      const r = rng.range(1.2, 2.2);
+      const h = rng.range(2.6, 4.4);
+      cyl.add(ux, top + 0.9 + h / 2, uz, r, h, r, rot, new THREE.Color(0x7d6a58), 0);
+      if (detail > 0.9) box.add(ux, top + 0.45, uz, r * 1.5, 0.9, r * 1.5, rot, dark, 0);
+    } else {
+      // Stair head with a door-sized face.
+      const sw = rng.range(2.6, 3.8);
+      const sh = rng.range(2.4, 3.2);
+      box.add(ux, top + sh / 2, uz, sw, sh, sw * 0.8, rot, dark, 0);
+    }
+  }
+  // A mast on the tall ones. Deliberately not a collider: a 30 cm pole you cannot see
+  // until it has killed you is the unfair collision the specification rules out (§146),
+  // and it would also quietly move the goalposts for every gate authored above a roof.
+  if (tall && rng.bool(0.35)) {
+    const mh = rng.range(8, 26);
+    cyl.add(x, top + mh / 2, z, 0.32, mh, 0.32, 0, new THREE.Color(0xb44b3a), 0);
+  }
+}
+
 /** One building: stacked masses, optional spire, registered for collision. */
 function addBuilding(ctx, opts) {
   const { box, cyl, cone, roof, grid } = ctx;
-  const { x, z, w, d, height, rot, palette, glass, rng, type } = opts;
+  const { x, z, w, d, height, rot, palette, glass, rng, type, detail = 1 } = opts;
   const base = terrainHeight(x, z) - 2;
   const color = new THREE.Color(palette[rng.int(0, palette.length - 1)]);
   color.offsetHSL(0, 0, rng.range(-0.05, 0.05));
+  // Facade style: 0 office, 1 home, 2 industrial. It decides window size, how the
+  // lights come on at night, and how much glazing the walls carry.
+  const style = type === 'house' ? 1 : (type === 'shed' || type === 'silo' || type === 'stack') ? 2 : 0;
 
   let top = base;
 
   if (type === 'silo') {
     const r = Math.min(w, d) * 0.42;
-    cyl.add(x, base + height / 2, z, r, height, r, rot, color);
+    cyl.add(x, base + height / 2, z, r, height, r, rot, color, 0, style, 1);
     top = base + height;
   } else if (type === 'stack') {
     const r = Math.min(w, d) * 0.16;
-    cyl.add(x, base + height / 2, z, r, height, r, rot, color.clone().multiplyScalar(0.8));
+    cyl.add(x, base + height / 2, z, r, height, r, rot, color.clone().multiplyScalar(0.8), 0, style, 1);
     // A banded collar so stacks read as stacks from a distance.
     cyl.add(x, base + height * 0.86, z, r * 1.5, height * 0.06, r * 1.5, rot, new THREE.Color(0xd04a2a));
     top = base + height;
   } else if (type === 'house') {
     const h = height;
-    box.add(x, base + h / 2, z, w, h, d, rot, color, 0.1);
+    box.add(x, base + h / 2, z, w, h, d, rot, color, 0.1, style, 1);
     // A pyramid sized to the box's own half-diagonal and turned 45 degrees sits on
     // the walls instead of hanging over them like a hat.
     const roofR = Math.hypot(w, d) * 0.5 * 1.04;
@@ -289,7 +462,7 @@ function addBuilding(ctx, opts) {
       color.clone().multiplyScalar(0.78));
     top = base + h + roofH;
   } else if (type === 'shed') {
-    box.add(x, base + height / 2, z, w, height, d, rot, color, 0.05);
+    box.add(x, base + height / 2, z, w, height, d, rot, color, 0.05, style, 1);
     // Roof vents / skylights.
     if (rng.bool(0.5)) {
       box.add(x, base + height + 1.2, z, w * 0.55, 2.4, d * 0.3, rot, color.clone().multiplyScalar(0.75), 0);
@@ -303,7 +476,7 @@ function addBuilding(ctx, opts) {
     let remaining = height;
     for (let s = 0; s < stages; s++) {
       const share = s === stages - 1 ? remaining : remaining * rng.range(0.45, 0.72);
-      box.add(x, y + share / 2, z, cw, share, cd, rot, color, glass);
+      box.add(x, y + share / 2, z, cw, share, cd, rot, color, glass, style, s === 0 ? 1 : 0);
       y += share;
       remaining -= share;
       cw *= rng.range(0.62, 0.84);
@@ -317,9 +490,20 @@ function addBuilding(ctx, opts) {
       top += spireH;
     } else if (rng.bool(0.55)) {
       const boxH = rng.range(3, 9);
-      box.add(x + rng.range(-cw * 0.2, cw * 0.2), top + boxH / 2, z, cw * 0.45, boxH, cd * 0.45, rot, color.clone().multiplyScalar(0.8), 0);
+      box.add(x + rng.range(-cw * 0.2, cw * 0.2), top + boxH / 2, z, cw * 0.45, boxH, cd * 0.45, rot, color.clone().multiplyScalar(0.8), 0, style, 0);
       top += boxH;
     }
+    // Only the roofs that are worth the instances: tall enough to be flown past, and
+    // not all of them even then.
+    if (detail > 0.55 && height > 45 && ctx.deco.bool(0.45 * detail)) {
+      addRoofClutter(ctx, { x, z, w: cw, d: cd, top, rot, color, detail, tall: height > 120 });
+    }
+  }
+
+  // Flat-roofed small buildings get a little plant too, but rarely enough that the
+  // low-rise districts stay calmer than downtown.
+  if ((type === 'shed' || type === 'silo') && detail > 0.7 && ctx.deco.bool(0.16)) {
+    addRoofClutter(ctx, { x, z, w, d, top, rot, color, detail: detail * 0.5, tall: false });
   }
 
   const halfW = Math.max(w, d) * 0.5;
@@ -355,6 +539,10 @@ export function generateCity({ seed = 20260912, detail = 1 } = {}) {
     // Four-sided, so a house gets a pitched roof rather than an octagonal hat.
     roof: new InstanceBatch(new THREE.ConeGeometry(1, 1, 4), roofMat),
     grid,
+    // Decoration draws from its own stream. Sharing the layout's would mean adding a
+    // water tank to one roof moved every building after it, which silently invalidates
+    // every checkpoint and beacon authored against the city.
+    deco: new Rng(seed ^ 0x5eed5),
   };
 
   const urban = new Float32Array(9);
@@ -420,7 +608,7 @@ export function generateCity({ seed = 20260912, detail = 1 } = {}) {
 
           addBuilding(ctx, {
             x, z, w: fw, d: fd, height, rot: rng.bool(0.12) ? rng.range(0, Math.PI) : 0,
-            palette: b.palette, glass: b.glass, rng, type, spireChance: b.spireChance,
+            palette: b.palette, glass: b.glass, rng, type, spireChance: b.spireChance, detail,
           });
           placed++;
           regionCount++;
