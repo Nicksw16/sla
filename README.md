@@ -8,10 +8,19 @@ storms and at night.
 Built with Three.js. No art or audio assets: the city, the aircraft, the terrain and
 every sound are generated at runtime.
 
+## Just play it
+
+`SKYLINE-FLIGHT.html` in the root of this repository is the whole game in one file:
+download it, double-click it, and it opens in your browser. No install, no terminal, no
+server, and it works offline. `npm run build:single` regenerates it.
+
+Everything below is for working on the game rather than playing it.
+
 ```bash
 npm install
 npm run dev         # development server
 npm run build       # production build into dist/
+npm run build:single # the standalone SKYLINE-FLIGHT.html
 npm run test:unit   # flight physics and content validation, seconds, no browser
 npm test            # the above, then a build, then the headless end-to-end run
 ```
