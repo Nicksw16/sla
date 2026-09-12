@@ -470,16 +470,28 @@ async function main() {
   });
   check('a race mission spawns the rival', rivalStarted && !!rivalBefore && rivalBefore.inScene,
     JSON.stringify(rivalBefore));
-  await waitFor(page, () => window.__skyline.missions.state === 'running', null, 20000);
-  await sleep(6000);
-  const rivalFlying = await page.evaluate(() => {
+  await waitFor(page, () => window.__skyline.missions.state === 'running', null, 120000);
+  // Wait for it to actually get going. Asserting that it had already passed a gate a
+  // few seconds in was measuring wall time: at these frame rates, with dt clamped per
+  // frame, that is a fraction of a second of game time and it is still on the first leg.
+  const rivalMoved = await waitFor(page,
+    () => window.__skyline.missions.rival?.progress > 0.01, null, 120000);
+  const rivalFlying = await evaluate(page, () => {
     const r = window.__skyline.missions.rival;
     const st = window.__skyline.missions.status();
-    return r ? { target: r.target, speed: Math.round(r.flight.airspeed * 3.6), gap: st.rivalGap?.metres ?? null,
-      hudVisible: !document.getElementById('hud-rival').classList.contains('hidden') } : null;
+    return r ? {
+      progress: Number((r.progress ?? 0).toFixed(3)),
+      speed: Math.round(r.flight.airspeed * 3.6),
+      topSpeed: Math.round(r.spec.maxSpeed * 3.6),
+      gap: st.rivalGap?.metres ?? null,
+      hudVisible: !document.getElementById('hud-rival').classList.contains('hidden'),
+    } : null;
   });
+  // The no-cheating property: it flies, and it does not exceed its own aircraft's
+  // capability. Its top speed comes from the same catalogue the player buys from.
   check('the rival flies its own aircraft under the same physics',
-    !!rivalFlying && rivalFlying.speed > 100 && rivalFlying.target > 0,
+    !!rivalFlying && rivalMoved && rivalFlying.speed > 100
+      && rivalFlying.speed <= rivalFlying.topSpeed * 1.35,
     JSON.stringify(rivalFlying));
   check('the HUD reports the gap to the rival', !!rivalFlying?.hudVisible && rivalFlying.gap !== null,
     JSON.stringify(rivalFlying));
