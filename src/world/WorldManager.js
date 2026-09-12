@@ -71,6 +71,8 @@ export class WorldManager {
       new TrafficManager({ scene: this.scene, settings: this.settings, seed: this.seed + 7 }));
 
     this.scene.fog = new THREE.Fog(0xbdd6e8, 400, this.settings.preset.drawDistance);
+    // Set when conditions change instantly, so the visibility arrives with them.
+    this._snapFog = true;
     this.applyQuality();
     this.timeOfDay.setHour(12.5);
     onProgress(1, 'READY');
@@ -95,6 +97,10 @@ export class WorldManager {
     this.weather?.set(weather, { instant });
     this.timeOfDay?.setHour(hour);
     this.timeScale = timeScale;
+    // An instant change has to carry the visibility with it. The fog range is damped,
+    // so without this a mission briefed as fog opens at clear-weather draw distance and
+    // closes in over the first two seconds of the run.
+    if (instant) this._snapFog = true;
   }
 
   // ------------------------------------------------------------- collider API
@@ -170,7 +176,8 @@ export class WorldManager {
     const targetFar = preset.drawDistance * lerp(0.22, 1, wx.current.visibility);
     const fog = this.scene.fog;
     fog.color.copy(tod.state.fog).lerp(new THREE.Color(wx.current.hazeTint), 0.45 + (1 - wx.current.visibility) * 0.4);
-    fog.far = damp(fog.far, targetFar, 1.5, dt);
+    fog.far = this._snapFog ? targetFar : damp(fog.far, targetFar, 1.5, dt);
+    this._snapFog = false;
     fog.near = fog.far * 0.04;
     // Lightning lights the whole scene, not just the sky.
     if (wx.flash > 0.01) fog.color.addScalar(wx.flash * 0.25);
