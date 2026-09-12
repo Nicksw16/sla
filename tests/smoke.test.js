@@ -17,6 +17,9 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+// The mission catalogue is pure data with no browser dependencies, so the test can
+// read it directly rather than trying to discover mission ids through the DOM.
+import { MISSIONS } from '../src/data/missions.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DIST = path.join(ROOT, 'dist');
@@ -279,11 +282,13 @@ async function main() {
 
   // ---------------------------------------------------------------- flying it
   console.log('\n  flying the mission with keyboard input…');
-  const flight = await flyMission(page, 210000);
+  // Generous budget: the route is about 50 s of game time, but software rendering
+  // runs several times slower than real time, and the scripted pilot is not efficient.
+  const flight = await flyMission(page, 480000);
   check('checkpoints can be flown through', flight.passed > 0, `${flight.passed}/${flight.total} gates`);
-  check('the mission completes', flight.completed, JSON.stringify({
-    state: flight.state, passed: flight.passed, total: flight.total, reason: flight.reason,
-  }));
+  check('the mission completes', flight.completed, flight.state === 'running'
+    ? `ran out of test budget with ${flight.passed}/${flight.total} gates flown`
+    : JSON.stringify({ state: flight.state, passed: flight.passed, total: flight.total, reason: flight.reason }));
   if (flight.completed) {
     console.log(`       finished in ${flight.time.toFixed(1)} s, ${flight.stars} star(s), score ${flight.score.toLocaleString()}`);
   }
@@ -349,18 +354,51 @@ async function main() {
     upgrade.out.ok && upgrade.after > upgrade.before && Math.abs(upgrade.flown - upgrade.after) < 0.01,
     JSON.stringify(upgrade));
 
-  const buy = await page.evaluate(() => {
+  // Grant every star so the locked half of the campaign can be exercised. Granting
+  // only the missions already played leaves the star total at three, and everything
+  // gated above that silently refuses to start.
+  const buy = await page.evaluate((ids) => {
     const g = window.__skyline;
     g.progression.data.credits = 200000;
-    for (const m of Object.keys(g.progression.data.stars)) g.progression.data.stars[m] = 3;
-    // Enough stars for the whole roster.
-    const { MISSIONS } = g.__missions ?? {};
+    for (const id of ids) g.progression.data.stars[id] = 3;
     const out = g.progression.buyAircraft('vector');
     g._rebuildAircraftModel();
-    return { out, active: g.progression.data.activeAircraft, flown: g.flight.spec.name, engines: g.spec.model.engines };
-  });
+    return {
+      out, active: g.progression.data.activeAircraft, flown: g.flight.spec.name,
+      totalStars: g.progression.totalStars, rating: g.progression.rating.name,
+      raceUnlocked: g.progression.isMissionUnlocked('rival-downtown'),
+    };
+  }, MISSIONS.map((m) => m.id));
   check('a new aircraft can be bought and becomes the flown aircraft',
     buy.out.ok !== false && buy.active === 'vector' && buy.flown.includes('VECTOR'), JSON.stringify(buy));
+  check('a full star count unlocks the late campaign and the top rating',
+    buy.totalStars === MISSIONS.length * 3 && buy.raceUnlocked && buy.rating === 'SKYLINE MASTER',
+    JSON.stringify(buy));
+
+  // ---------------------------------------------------------------- rival
+  // The rival has its own FlightModel and has only been exercised in Node until here.
+  await page.evaluate(() => window.__skyline._startMission('rival-downtown'));
+  const rivalStarted = await waitFor(page, () => window.__skyline.state === 'playing', null, 30000);
+  const rivalBefore = await page.evaluate(() => {
+    const r = window.__skyline.missions.rival;
+    return r ? { name: r.name, aircraft: r.spec.name, pos: r.position.toArray(), inScene: !!r.mesh.parent, target: r.target } : null;
+  });
+  check('a race mission spawns the rival', rivalStarted && !!rivalBefore && rivalBefore.inScene,
+    JSON.stringify(rivalBefore));
+  await waitFor(page, () => window.__skyline.missions.state === 'running', null, 20000);
+  await sleep(6000);
+  const rivalFlying = await page.evaluate(() => {
+    const r = window.__skyline.missions.rival;
+    const st = window.__skyline.missions.status();
+    return r ? { target: r.target, speed: Math.round(r.flight.airspeed * 3.6), gap: st.rivalGap?.metres ?? null,
+      hudVisible: !document.getElementById('hud-rival').classList.contains('hidden') } : null;
+  });
+  check('the rival flies its own aircraft under the same physics',
+    !!rivalFlying && rivalFlying.speed > 100 && rivalFlying.target > 0,
+    JSON.stringify(rivalFlying));
+  check('the HUD reports the gap to the rival', !!rivalFlying?.hudVisible && rivalFlying.gap !== null,
+    JSON.stringify(rivalFlying));
+  await page.screenshot({ path: path.join(SHOTS, '08-rival.png') });
 
   // ---------------------------------------------------------------- free flight
   await page.evaluate(() => window.__skyline._startFreeFlight());
