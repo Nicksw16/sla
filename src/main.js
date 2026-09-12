@@ -26,6 +26,7 @@ import { HUD } from './ui/HUD.js';
 import { Minimap } from './ui/Minimap.js';
 import { HangarScene } from './ui/HangarScene.js';
 import { UIManager } from './ui/UIManager.js';
+import { TouchControls } from './ui/TouchControls.js';
 
 import { MISSION_BY_ID } from './data/missions.js';
 import { REGIONS } from './data/regions.js';
@@ -244,6 +245,8 @@ class Game {
     });
     this.audio = new AudioManager({ settings: this.settings, bus: this.bus });
     this.hud = new HUD({ bus: this.bus, settings: this.settings, camera: this.camera });
+    // Only builds itself on a device that reports touch; a no-op everywhere else.
+    this.touch = new TouchControls({ input: this.input, bus: this.bus, settings: this.settings });
     this.minimap = new Minimap({ canvas: document.getElementById('minimap'), settings: this.settings });
 
     this._rebuildAircraftModel();
@@ -344,6 +347,7 @@ class Game {
     this.audio?.resume();
     this.input.requestMouseLock(this.canvas);
     this._lastDistance = this.flight.distanceFlown;
+    this.touch.syncThrottle(this.flight.throttleCmd);
     await this.ui.fade('in', 260);
   }
 
@@ -373,6 +377,7 @@ class Game {
     this.audio?.resume();
     this.input.requestMouseLock(this.canvas);
     this._lastDistance = this.flight.distanceFlown;
+    this.touch.syncThrottle(this.flight.throttleCmd);
     await this.ui.fade('in', 260);
   }
 
@@ -664,6 +669,7 @@ class Game {
 
     const playing = this.state === STATE.PLAYING;
     const simulating = playing || this.state === STATE.OUTRO;
+    this.touch.setVisible(playing);
 
     if (simulating) {
       // Order matters here:

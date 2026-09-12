@@ -64,6 +64,21 @@ html = html.includes('</body>')
   : `${html}\n${inline}`;
 
 await writeFile(OUT, html);
+
+// A second shape of the same build, for hosting as an artifact: the host supplies the
+// document wrapper, so this is the title, the styles, the body and the script with the
+// outer tags taken off.
+if (process.argv.includes('--artifact')) {
+  const head = html.match(/<head>([\s\S]*?)<\/head>/i)?.[1] ?? '';
+  const body = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i)?.[1] ?? html;
+  const title = head.match(/<title>[\s\S]*?<\/title>/i)?.[0] ?? '<title>Skyline Flight</title>';
+  const styles = [...head.matchAll(/<style>[\s\S]*?<\/style>/gi)].map((m) => m[0]).join('\n');
+  const target = process.argv[process.argv.indexOf('--artifact') + 1];
+  if (!target) throw new Error('--artifact needs an output path');
+  await writeFile(target, `${title}\n${styles}\n${body}\n`);
+  console.log(`artifact page written to ${target}`);
+}
+
 await rm(WORK, { recursive: true, force: true });
 
 const kb = Math.round(Buffer.byteLength(html) / 1024);

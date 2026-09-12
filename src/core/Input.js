@@ -51,6 +51,13 @@ export class Input {
     this.axes = { pitch: 0, roll: 0, yaw: 0, throttle: 0 };
     this.buttons = { turbo: false, brake: false, look: false, levelOut: false };
     this.mouse = { dx: 0, dy: 0, x: 0, y: 0, down: false, wheel: 0, locked: false };
+    // Written by TouchControls. throttleTarget is an absolute lever position rather
+    // than a rate, because a thumb sets a throttle and lets go of it.
+    this.touch = {
+      roll: 0, pitch: 0, yaw: 0, throttleTarget: null,
+      buttons: { turbo: false, brake: false, levelOut: false },
+      taps: [],
+    };
     this.gamepadIndex = null;
     this.gamepadConnected = false;
     this._vibrateUntil = 0;
@@ -209,6 +216,20 @@ export class Input {
         if (Math.abs(this._mouseAim.roll) > Math.abs(roll)) roll = this._mouseAim.roll;
       }
 
+      // Touch: the stick wins over anything else, because a thumb on screen is a
+      // deliberate input and nothing else is competing for it.
+      const t = this.touch;
+      if (Math.abs(t.roll) > Math.abs(roll)) roll = t.roll;
+      if (Math.abs(t.pitch) > Math.abs(pitch)) pitch = t.pitch;
+      if (t.buttons.turbo) turbo = true;
+      if (t.buttons.brake) brake = true;
+      if (t.buttons.levelOut) levelOut = true;
+      for (const tap of t.taps) {
+        const binding = this.bindings[tap];
+        if (binding) this.pressedThisFrame.add(binding[0]);
+      }
+      t.taps.length = 0;
+
       const pad = this._pollGamepad();
       if (pad) {
         const ax = (i) => deadzone(pad.axes[i] ?? 0);
@@ -240,6 +261,9 @@ export class Input {
     }
 
     this.axes.throttle = clamp(throttleDelta, -1, 1);
+    // A touch throttle is a position. The flight model integrates a rate, so this is
+    // the error between where the lever is and where the thumb left it.
+    this.throttleTarget = this.touch.throttleTarget;
     this.buttons.turbo = turbo;
     this.buttons.brake = brake;
     this.buttons.look = look;

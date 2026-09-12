@@ -82,6 +82,14 @@ export const DEFAULT_SETTINGS = {
 export class Settings {
   constructor() {
     this.data = { ...DEFAULT_SETTINGS };
+    // A phone opening the game at desktop quality renders one frame a second and
+    // reads as broken. The player can still pick any setting; this is only the
+    // first-run guess, and a saved choice overrides it below.
+    if (typeof navigator !== 'undefined' && (navigator.maxTouchPoints > 0 || 'ontouchstart' in globalThis)
+        && Math.min(screen?.width ?? 9999, screen?.height ?? 9999) < 900) {
+      this.data.quality = 'medium';
+      this.data.hudScale = 'large';
+    }
     this.listeners = new Set();
     this.load();
   }

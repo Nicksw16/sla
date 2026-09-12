@@ -193,7 +193,13 @@ export class FlightModel {
     this.turboMultiplier = this.turboActive ? spec.turboMult : 1;
 
     // ---- throttle -------------------------------------------------------
-    this.throttleCmd = clamp(this.throttleCmd + input.axes.throttle * dt * 0.9, 0, 1);
+    // A lever the player holds a position on (a touch throttle) sets the command
+    // directly; a key or a trigger moves it at a rate.
+    if (input.throttleTarget != null) {
+      this.throttleCmd = clamp(input.throttleTarget, 0, 1);
+    } else {
+      this.throttleCmd = clamp(this.throttleCmd + input.axes.throttle * dt * 0.9, 0, 1);
+    }
     if (this.turboActive) this.throttleCmd = Math.max(this.throttleCmd, 0.85);
     this.throttle = damp(this.throttle, this.throttleCmd, 4.2, dt);
     this.brake = damp(this.brake, input.buttons.brake ? 1 : 0, 9, dt);

@@ -12,7 +12,9 @@ every sound are generated at runtime.
 
 `SKYLINE-FLIGHT.html` in the root of this repository is the whole game in one file:
 download it, double-click it, and it opens in your browser. No install, no terminal, no
-server, and it works offline. `npm run build:single` regenerates it.
+server, and it works offline. `npm run build:single` regenerates it, and
+`node tools/build-single.mjs --artifact out.html` emits the same build in the shape a
+host that supplies its own document wrapper expects, for putting it behind a link.
 
 Everything below is for working on the game rather than playing it.
 
@@ -47,6 +49,14 @@ minutes. `npm run test:unit` is the one to run while working.
 
 A gamepad works if one is connected: left stick flies, right stick rudders, triggers for
 throttle, A or RB for turbo.
+
+On a phone or tablet the game builds its own controls: a self-centring stick under the
+left thumb for bank and pitch, a throttle lever under the right, and buttons for turbo,
+airbrake, recovery, camera, reset and pause. They write into the same axis set the
+keyboard and the gamepad write into, so the flight model never learns where the input
+came from. The HUD moves up out from under the thumbs, the screens tighten for a short
+viewport, and a phone held upright is asked to turn sideways. First run on a small touch
+screen picks medium quality and a larger HUD; every setting is still the player's.
 
 ## How the flight model works
 
