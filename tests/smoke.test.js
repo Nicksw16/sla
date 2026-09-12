@@ -580,8 +580,18 @@ async function flyMission(page, budgetMs) {
 
   let lastPassed = 0;
   let lastReport = Date.now();
+  // page.evaluate has no timeout of its own, and a page rendering at two frames a
+  // second can keep one waiting for a free slot indefinitely. Without this guard the
+  // flight loop hangs past its own deadline and takes the whole run with it.
+  const withTimeout = (promise, ms, label) => Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out`)), ms)),
+  ]);
+
   while (Date.now() < deadline) {
-    const s = await page.evaluate(() => {
+    let s;
+    try {
+      s = await withTimeout(page.evaluate(() => {
       const g = window.__skyline;
       const st = g.missions.status();
       if (!st.nav) {
@@ -604,7 +614,11 @@ async function flyMission(page, budgetMs) {
         agl: f.aboveGround,
         stall: f.stallFactor,
       };
-    });
+      }), 30000, 'flight telemetry read');
+    } catch (err) {
+      console.log(`       ${err.message}; the page is not keeping up, ending the hand-flown section`);
+      break;
+    }
 
     if (s.done || s.state === 'success' || s.state === 'failed') {
       await setKeys(new Set());
