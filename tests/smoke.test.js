@@ -224,8 +224,17 @@ async function main() {
   check('a mission starts and the HUD appears', spawn.hudVisible && spawn.gates === 6, JSON.stringify(spawn));
   check('the aircraft spawns airborne and moving', spawn.alt > 100 && spawn.speed > 20, JSON.stringify(spawn));
 
-  // Wait out the countdown, then verify each control axis does what it says.
-  await page.waitForFunction(() => window.__skyline.missions.state === 'running', null, { timeout: 20000 });
+  // Drop to the low preset for the flying sections. The renderer here is SwiftShader
+  // on a CPU and runs at a couple of frames a second on the high preset; since the
+  // simulation clamps dt per frame, that makes game time crawl relative to wall time.
+  // Fidelity is already covered by the checks above; what follows is about behaviour.
+  await page.evaluate(() => window.__skyline.settings.set('quality', 'low'));
+  await sleep(1500);
+
+  // Wait out the countdown. Three seconds of game time, but see above.
+  const started = await waitFor(page, () => window.__skyline.missions.state === 'running', null, 120000);
+  check('the mission countdown completes and the run starts', started,
+    `mission state ${await page.evaluate(() => window.__skyline.missions.state)}`);
 
   // These checks assert direction, and read the control surface as well as the
   // attitude. Under software rendering the frame rate is low enough that a fixed
@@ -522,7 +531,7 @@ async function main() {
   });
   check('a takeoff mission starts the aircraft on the ground', takeoff.grounded, JSON.stringify(takeoff));
 
-  await page.waitForFunction(() => window.__skyline.missions.state === 'running', null, { timeout: 20000 }).catch(() => {});
+  await waitFor(page, () => window.__skyline.missions.state === 'running', null, 120000);
   await page.keyboard.down('w');
   await sleep(9000);
   await page.keyboard.down('ArrowUp');

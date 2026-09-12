@@ -699,14 +699,18 @@ class Game {
       this.frameTimes.push(rawDt);
       if (this.frameTimes.length > 90) this.frameTimes.shift();
     }
-    if (this.frameTimes.length >= 30) {
+    if (this.frameTimes.length >= 20) {
       const mean = this.frameTimes.reduce((a, b) => a + b, 0) / this.frameTimes.length;
       this.fps = 1 / Math.max(mean, 1e-4);
     }
     this.ui.setFps(this.fps, this.settings.get('showFps'));
 
-    this._autoQualityTimer += dt;
-    if (this._autoQualityTimer < 4 || this.frameTimes.length < 60) return;
+    // Real elapsed time, not the clamped simulation step. Using the clamped dt meant
+    // that on the hardware that needs this watchdog most - where a frame takes half a
+    // second - it took over half a minute of staring at a slideshow before the first
+    // reduction, because each frame only advanced the timer by a sixteenth of a second.
+    this._autoQualityTimer += rawDt;
+    if (this._autoQualityTimer < 3 || this.frameTimes.length < 20) return;
     this._autoQualityTimer = 0;
     const bias = this.settings.get('renderScaleBias');
     if (this.fps < 40 && bias > 0.62) {
