@@ -1,0 +1,455 @@
+import * as THREE from 'three';
+import { lerp } from '../core/MathUtils.js';
+import { Rng } from '../core/Rng.js';
+import { LANDMARKS, RUNWAY } from '../data/regions.js';
+import { terrainHeight, isWater } from './Terrain.js';
+
+/**
+ * Hand-placed landmarks (spec §25-26).
+ *
+ * These are the objects the player navigates by, so each one has a silhouette
+ * nothing else in the city shares. They also carry the deliberate flyable gaps —
+ * under the bridge deck, through the ridge pass — that make a risky line possible
+ * (§34, §113). Colliders are registered with a base as well as a top, so "under"
+ * is genuinely open air rather than an invisible wall.
+ */
+
+const M = {
+  concrete: () => new THREE.MeshStandardMaterial({ color: 0xa9a49b, roughness: 0.92, metalness: 0.04 }),
+  steel: () => new THREE.MeshStandardMaterial({ color: 0x7d8793, roughness: 0.5, metalness: 0.7 }),
+  red: () => new THREE.MeshStandardMaterial({ color: 0xc23a2b, roughness: 0.6, metalness: 0.2 }),
+  glass: () => new THREE.MeshStandardMaterial({
+    color: 0x7fc4dc, roughness: 0.1, metalness: 0.3, transparent: true, opacity: 0.7,
+  }),
+  dark: () => new THREE.MeshStandardMaterial({ color: 0x2a2f36, roughness: 0.8, metalness: 0.2 }),
+  asphalt: () => new THREE.MeshStandardMaterial({ color: 0x33373c, roughness: 0.95, metalness: 0 }),
+  grass: () => new THREE.MeshStandardMaterial({ color: 0x3f5a2e, roughness: 1, metalness: 0 }),
+  marking: () => new THREE.MeshBasicMaterial({ color: 0xf0f0e8 }),
+  beacon: (c) => new THREE.MeshBasicMaterial({ color: c }),
+};
+
+function mesh(geo, mat, x, y, z, rot = 0) {
+  const m = new THREE.Mesh(geo, mat);
+  m.position.set(x, y, z);
+  if (rot) m.rotation.y = rot;
+  m.castShadow = true;
+  m.receiveShadow = true;
+  return m;
+}
+
+/** Skyline Tower: the city's single most useful orientation cue. */
+function buildSpire(g, grid, L, mats) {
+  const base = terrainHeight(L.x, L.z);
+  const h = L.height;
+  // Four tapering stages.
+  const stages = [
+    { y: 0.00, hh: 0.42, w: 38 },
+    { y: 0.42, hh: 0.28, w: 26 },
+    { y: 0.70, hh: 0.16, w: 17 },
+  ];
+  for (const s of stages) {
+    g.add(mesh(new THREE.BoxGeometry(s.w, h * s.hh, s.w), mats.concrete, L.x, base + h * s.y + h * s.hh / 2, L.z));
+  }
+  // Observation deck: the wide ring that makes the silhouette unmistakable.
+  g.add(mesh(new THREE.CylinderGeometry(30, 30, 14, 16), mats.glass, L.x, base + h * 0.74, L.z));
+  g.add(mesh(new THREE.CylinderGeometry(33, 33, 2.5, 16), mats.steel, L.x, base + h * 0.74 - 8, L.z));
+  // Mast and aircraft warning beacon.
+  g.add(mesh(new THREE.CylinderGeometry(1.4, 2.6, h * 0.24, 8), mats.steel, L.x, base + h * 0.88, L.z));
+  const beacon = mesh(new THREE.SphereGeometry(3.4, 8, 6), M.beacon(0xff3b30), L.x, base + h, L.z);
+  beacon.castShadow = false;
+  g.add(beacon);
+  grid.add(L.x - 20, L.x + 20, L.z - 20, L.z + 20, base, base + h, 'landmark');
+  return beacon;
+}
+
+function buildObelisk(g, grid, L, mats) {
+  const base = terrainHeight(L.x, L.z);
+  const h = L.height;
+  const geo = new THREE.CylinderGeometry(9, 30, h, 4);
+  g.add(mesh(geo, mats.glass, L.x, base + h / 2, L.z, Math.PI / 4));
+  g.add(mesh(new THREE.ConeGeometry(9, 34, 4), mats.steel, L.x, base + h + 17, L.z, Math.PI / 4));
+  const beacon = mesh(new THREE.SphereGeometry(2.6, 8, 6), M.beacon(0xff3b30), L.x, base + h + 36, L.z);
+  g.add(beacon);
+  grid.add(L.x - 22, L.x + 22, L.z - 22, L.z + 22, base, base + h + 34, 'landmark');
+  return beacon;
+}
+
+/** Ridgeway Stadium: an open bowl you can drop into and climb back out of. */
+function buildStadium(g, grid, L, mats) {
+  const base = terrainHeight(L.x, L.z);
+  const h = L.height;
+  const outer = 150, inner = 112;
+  const ring = new THREE.Mesh(new THREE.CylinderGeometry(outer, outer * 1.06, h, 28, 1, true), mats.concrete);
+  ring.position.set(L.x, base + h / 2, L.z);
+  ring.castShadow = true;
+  g.add(ring);
+  // Canopy roof leaning inward.
+  const roof = new THREE.Mesh(new THREE.RingGeometry(inner, outer * 1.04, 28), mats.steel);
+  roof.rotation.x = -Math.PI / 2;
+  roof.position.set(L.x, base + h, L.z);
+  g.add(roof);
+  // Pitch.
+  const pitch = new THREE.Mesh(new THREE.CircleGeometry(inner - 6, 28), mats.grass);
+  pitch.rotation.x = -Math.PI / 2;
+  pitch.position.set(L.x, base + 1.2, L.z);
+  g.add(pitch);
+  // Floodlight pylons.
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+    const px = L.x + Math.cos(a) * outer * 0.98;
+    const pz = L.z + Math.sin(a) * outer * 0.98;
+    g.add(mesh(new THREE.BoxGeometry(4, h * 0.75, 4), mats.steel, px, base + h + h * 0.37, pz));
+    const lamp = mesh(new THREE.BoxGeometry(16, 5, 3), M.beacon(0xfff4d0), px, base + h * 1.75, pz);
+    g.add(lamp);
+  }
+  // The bowl wall is solid; the middle is open air.
+  const step = (Math.PI * 2) / 16;
+  for (let i = 0; i < 16; i++) {
+    const a = i * step;
+    const px = L.x + Math.cos(a) * outer;
+    const pz = L.z + Math.sin(a) * outer;
+    grid.add(px - 20, px + 20, pz - 20, pz + 20, base, base + h, 'landmark');
+  }
+}
+
+/** Northgate Bridge. The gap under the deck is a legal shortcut (spec §24, §34). */
+function buildBridge(g, grid, L, mats) {
+  const h = L.height;
+  const deckY = h * 0.52;
+  const spanHalf = 420;
+  const deckW = 34;
+  // Deck, as a thin slab: only the slab itself blocks, so flying under works.
+  const deck = mesh(new THREE.BoxGeometry(spanHalf * 2, 3.4, deckW), mats.concrete, L.x, deckY, L.z);
+  g.add(deck);
+  g.add(mesh(new THREE.BoxGeometry(spanHalf * 2, 2.2, 1.2), mats.steel, L.x, deckY + 2.4, L.z - deckW / 2));
+  g.add(mesh(new THREE.BoxGeometry(spanHalf * 2, 2.2, 1.2), mats.steel, L.x, deckY + 2.4, L.z + deckW / 2));
+  grid.add(L.x - spanHalf, L.x + spanHalf, L.z - deckW / 2, L.z + deckW / 2, deckY - 3, deckY + 4, 'bridge');
+
+  // Towers and main cables.
+  for (const side of [-1, 1]) {
+    const tx = L.x + side * spanHalf * 0.46;
+    for (const zo of [-deckW / 2, deckW / 2]) {
+      g.add(mesh(new THREE.BoxGeometry(11, h, 11), mats.red, tx, deckY + h / 2 - 10, L.z + zo));
+    }
+    g.add(mesh(new THREE.BoxGeometry(30, 5, deckW + 14), mats.red, tx, deckY + h - 16, L.z));
+    grid.add(tx - 7, tx + 7, L.z - deckW / 2 - 7, L.z + deckW / 2 + 7, deckY - 10, deckY + h - 10, 'landmark');
+
+    // Hangers: thin verticals from the catenary down to the deck.
+    for (let i = 1; i < 13; i++) {
+      const t = i / 13;
+      const hx = lerp(tx, L.x + side * spanHalf, t);
+      const sag = Math.sin(t * Math.PI) * 0;
+      const topY = lerp(deckY + h - 22, deckY + 8, t * t) + sag;
+      const height = topY - deckY;
+      if (height < 2) continue;
+      for (const zo of [-deckW / 2, deckW / 2]) {
+        const cable = mesh(new THREE.CylinderGeometry(0.4, 0.4, height, 4), mats.steel, hx, deckY + height / 2, L.z + zo);
+        cable.castShadow = false;
+        g.add(cable);
+      }
+    }
+  }
+  // Approach ramps down to the shore.
+  for (const side of [-1, 1]) {
+    const rx = L.x + side * (spanHalf + 150);
+    g.add(mesh(new THREE.BoxGeometry(300, 3.4, deckW), mats.concrete, rx, deckY * 0.62, L.z));
+  }
+}
+
+function buildWheel(g, grid, L, mats) {
+  const base = terrainHeight(L.x, L.z);
+  const r = L.height * 0.42;
+  const cy = base + r + 12;
+  const wheel = new THREE.Group();
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(r, 1.5, 6, 36), mats.steel);
+  wheel.add(rim);
+  for (let i = 0; i < 16; i++) {
+    const a = (i / 16) * Math.PI * 2;
+    const spoke = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, r * 2, 4), mats.steel);
+    spoke.rotation.z = a;
+    wheel.add(spoke);
+    const car = new THREE.Mesh(new THREE.BoxGeometry(5, 5, 6), M.beacon(i % 2 ? 0xff6a3d : 0x3dd6ff));
+    car.position.set(Math.cos(a) * r, Math.sin(a) * r, 0);
+    wheel.add(car);
+  }
+  wheel.position.set(L.x, cy, L.z);
+  g.add(wheel);
+  // A-frame supports.
+  for (const side of [-1, 1]) {
+    g.add(mesh(new THREE.CylinderGeometry(1.6, 2.6, r + 14, 6), mats.steel, L.x + side * r * 0.4, base + (r + 14) / 2, L.z + side * 6));
+  }
+  grid.add(L.x - 8, L.x + 8, L.z - 8, L.z + 8, base, cy + r, 'landmark');
+  return wheel;
+}
+
+function buildCranes(g, grid, L, mats) {
+  const rng = new Rng(4242);
+  for (let i = 0; i < 5; i++) {
+    const x = L.x + i * 150 - 300;
+    const z = L.z;
+    const base = terrainHeight(x, z);
+    const h = 52 + rng.range(-6, 12);
+    // Legs, gantry beam and cantilevered boom out over the water.
+    for (const dx of [-14, 14]) {
+      for (const dz of [-12, 12]) {
+        g.add(mesh(new THREE.BoxGeometry(2.4, h, 2.4), mats.red, x + dx, base + h / 2, z + dz));
+      }
+    }
+    g.add(mesh(new THREE.BoxGeometry(36, 4, 32), mats.red, x, base + h, z));
+    g.add(mesh(new THREE.BoxGeometry(6, 3, 128), mats.red, x, base + h + 6, z + 40));
+    g.add(mesh(new THREE.BoxGeometry(8, 8, 10), mats.dark, x, base + h - 6, z + 70));
+    grid.add(x - 16, x + 16, z - 14, z + 14, base, base + h + 8, 'landmark');
+
+    // Container stacks, which is what makes a port read as a port from the air.
+    for (let c = 0; c < 8; c++) {
+      const cx = x + rng.range(-60, 60);
+      const cz = z - 90 - rng.range(0, 120);
+      const stack = rng.int(1, 4);
+      const cb = terrainHeight(cx, cz);
+      const hue = rng.pick([0xc0392b, 0x2980b9, 0x27ae60, 0xd4ac0d, 0x8e44ad]);
+      g.add(mesh(new THREE.BoxGeometry(12, 2.6 * stack, 30), new THREE.MeshStandardMaterial({ color: hue, roughness: 0.8 }), cx, cb + 1.3 * stack, cz));
+      grid.add(cx - 6, cx + 6, cz - 15, cz + 15, cb, cb + 2.6 * stack, 'building');
+    }
+  }
+}
+
+function buildDam(g, grid, L, mats) {
+  const base = terrainHeight(L.x, L.z);
+  const h = L.height;
+  const width = 460;
+  // Slight arch, built from segments.
+  const segs = 12;
+  for (let i = 0; i < segs; i++) {
+    const t = i / (segs - 1) - 0.5;
+    const x = L.x + t * width;
+    const z = L.z + Math.cos(t * Math.PI) * 26;
+    const segW = width / segs + 6;
+    g.add(mesh(new THREE.BoxGeometry(segW, h, 22), mats.concrete, x, base + h / 2 - 8, z));
+    grid.add(x - segW / 2, x + segW / 2, z - 11, z + 11, base - 8, base + h - 8, 'landmark');
+  }
+  // Reservoir behind it.
+  const water = new THREE.Mesh(new THREE.PlaneGeometry(width * 1.4, 520), new THREE.MeshStandardMaterial({
+    color: 0x27596b, roughness: 0.18, metalness: 0.5,
+  }));
+  water.rotation.x = -Math.PI / 2;
+  water.position.set(L.x, base + h - 22, L.z - 290);
+  g.add(water);
+}
+
+function buildControlTower(g, grid, L, mats) {
+  const base = terrainHeight(L.x, L.z);
+  const h = L.height;
+  g.add(mesh(new THREE.CylinderGeometry(6, 9, h, 12), mats.concrete, L.x, base + h / 2, L.z));
+  g.add(mesh(new THREE.CylinderGeometry(14, 11, 12, 12), mats.glass, L.x, base + h + 4, L.z));
+  g.add(mesh(new THREE.CylinderGeometry(15, 15, 1.6, 12), mats.dark, L.x, base + h + 11, L.z));
+  const beacon = mesh(new THREE.SphereGeometry(2, 8, 6), M.beacon(0x3dff7a), L.x, base + h + 14, L.z);
+  g.add(beacon);
+  grid.add(L.x - 12, L.x + 12, L.z - 12, L.z + 12, base, base + h + 12, 'landmark');
+  return beacon;
+}
+
+function buildMarina(g, grid, L, mats) {
+  const rng = new Rng(909);
+  const hullMat = new THREE.MeshStandardMaterial({ color: 0xe8ecef, roughness: 0.5 });
+  const sailMat = new THREE.MeshStandardMaterial({ color: 0xf5f5f0, roughness: 0.8, side: THREE.DoubleSide });
+  for (let p = 0; p < 4; p++) {
+    const px = L.x + p * 110 - 165;
+    g.add(mesh(new THREE.BoxGeometry(8, 2, 190), mats.concrete, px, 1.5, L.z + 60));
+    for (let b = 0; b < 7; b++) {
+      const side = b % 2 ? 1 : -1;
+      const bx = px + side * 13;
+      const bz = L.z - 20 + b * 26;
+      g.add(mesh(new THREE.BoxGeometry(5, 2.4, 13), hullMat, bx, 1.4, bz, rng.range(-0.1, 0.1)));
+      const mast = mesh(new THREE.CylinderGeometry(0.2, 0.2, 15, 4), mats.steel, bx, 9, bz);
+      mast.castShadow = false;
+      g.add(mast);
+      const sail = mesh(new THREE.PlaneGeometry(5, 11), sailMat, bx + 1.6, 8, bz, Math.PI / 2);
+      sail.castShadow = false;
+      g.add(sail);
+    }
+  }
+}
+
+/** Trees, for the park and the countryside. Instanced; they are everywhere. */
+function buildVegetation(g) {
+  const rng = new Rng(777);
+  const trunkGeo = new THREE.CylinderGeometry(0.5, 0.7, 4, 5);
+  const crownGeo = new THREE.ConeGeometry(3.6, 9, 6);
+  const trunkMat = new THREE.MeshStandardMaterial({ color: 0x53412c, roughness: 1 });
+  const crownMat = new THREE.MeshStandardMaterial({ color: 0x2f4a22, roughness: 1 });
+
+  const spots = [];
+  // Central Park.
+  for (let i = 0; i < 260; i++) {
+    const a = rng.range(0, Math.PI * 2), r = Math.sqrt(rng.next()) * 250;
+    spots.push([-620 + Math.cos(a) * r, 640 + Math.sin(a) * r]);
+  }
+  // Countryside treelines, following field boundaries.
+  for (let i = 0; i < 700; i++) {
+    const x = rng.range(-1450, 1450);
+    const z = rng.range(-4400, -1600);
+    spots.push([x, z]);
+  }
+  // Lower mountain slopes.
+  for (let i = 0; i < 420; i++) {
+    const x = rng.range(-4400, -1700);
+    const z = rng.range(-4400, -1700);
+    if (terrainHeight(x, z) > 520) continue;
+    spots.push([x, z]);
+  }
+
+  const valid = spots.filter(([x, z]) => !isWater(x, z));
+  const trunks = new THREE.InstancedMesh(trunkGeo, trunkMat, valid.length);
+  const crowns = new THREE.InstancedMesh(crownGeo, crownMat, valid.length);
+  const m = new THREE.Matrix4();
+  const q = new THREE.Quaternion();
+  const p = new THREE.Vector3();
+  const s = new THREE.Vector3();
+  valid.forEach(([x, z], i) => {
+    const y = terrainHeight(x, z);
+    const scale = rng.range(0.7, 1.5);
+    q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), rng.range(0, Math.PI));
+    p.set(x, y + 2 * scale, z);
+    s.set(scale, scale, scale);
+    m.compose(p, q, s);
+    trunks.setMatrixAt(i, m);
+    p.set(x, y + 4 * scale + 4 * scale, z);
+    m.compose(p, q, s);
+    crowns.setMatrixAt(i, m);
+  });
+  trunks.castShadow = false;
+  crowns.castShadow = true;
+  g.add(trunks, crowns);
+  return valid.length;
+}
+
+/** Skyline International: runway, taxiway, terminal, hangars, lighting (§60). */
+function buildAirport(g, grid, mats) {
+  const { x, z, length, width, elevation } = RUNWAY;
+  const group = new THREE.Group();
+  group.name = 'airport';
+
+  const strip = new THREE.Mesh(new THREE.PlaneGeometry(length, width), mats.asphalt);
+  strip.rotation.x = -Math.PI / 2;
+  strip.position.set(x, elevation + 0.25, z);
+  strip.receiveShadow = true;
+  group.add(strip);
+
+  // Centreline and threshold bars.
+  const dashGeo = new THREE.PlaneGeometry(38, 1.4);
+  const dashes = new THREE.InstancedMesh(dashGeo, mats.marking, Math.floor(length / 76));
+  const m = new THREE.Matrix4();
+  for (let i = 0; i < dashes.count; i++) {
+    m.makeRotationX(-Math.PI / 2);
+    m.setPosition(x - length / 2 + 40 + i * 76, elevation + 0.35, z);
+    dashes.setMatrixAt(i, m);
+  }
+  group.add(dashes);
+  for (const side of [-1, 1]) {
+    for (let i = 0; i < 8; i++) {
+      const bar = new THREE.Mesh(new THREE.PlaneGeometry(46, 2.6), mats.marking);
+      bar.rotation.x = -Math.PI / 2;
+      bar.position.set(x + side * (length / 2 - 40), elevation + 0.35, z - 18 + i * 5);
+      group.add(bar);
+    }
+  }
+
+  // Taxiway and apron.
+  const taxi = new THREE.Mesh(new THREE.PlaneGeometry(length * 0.8, 26), mats.asphalt);
+  taxi.rotation.x = -Math.PI / 2;
+  taxi.position.set(x, elevation + 0.2, z - 150);
+  group.add(taxi);
+  const apron = new THREE.Mesh(new THREE.PlaneGeometry(420, 180), mats.asphalt);
+  apron.rotation.x = -Math.PI / 2;
+  apron.position.set(x - 300, elevation + 0.2, z - 260);
+  group.add(apron);
+
+  // Terminal and hangars.
+  const terminal = mesh(new THREE.BoxGeometry(360, 26, 70), mats.glass, x - 300, elevation + 13, z - 330);
+  group.add(terminal);
+  grid.add(x - 480, x - 120, z - 365, z - 295, elevation, elevation + 26, 'building');
+  for (let i = 0; i < 3; i++) {
+    const hx = x + 180 + i * 130;
+    const hangar = mesh(new THREE.BoxGeometry(110, 24, 90), mats.steel, hx, elevation + 12, z - 300);
+    group.add(hangar);
+    const roof = mesh(new THREE.CylinderGeometry(55, 55, 90, 12, 1, false, 0, Math.PI), mats.steel, hx, elevation + 24, z - 300);
+    roof.rotation.z = Math.PI / 2;
+    roof.rotation.y = Math.PI / 2;
+    group.add(roof);
+    grid.add(hx - 55, hx + 55, z - 345, z - 255, elevation, elevation + 50, 'building');
+  }
+
+  // Runway edge lighting: the reason a night landing is possible at all (§63).
+  const lampGeo = new THREE.SphereGeometry(1.1, 5, 4);
+  const edgeMat = M.beacon(0xffffff);
+  const thrMat = M.beacon(0x2fff6a);
+  const count = Math.floor(length / 60);
+  const lights = new THREE.InstancedMesh(lampGeo, edgeMat, count * 2);
+  for (let i = 0; i < count; i++) {
+    for (let s = 0; s < 2; s++) {
+      m.identity();
+      m.setPosition(x - length / 2 + i * 60, elevation + 1, z + (s ? width / 2 : -width / 2));
+      lights.setMatrixAt(i * 2 + s, m);
+    }
+  }
+  group.add(lights);
+  for (const side of [-1, 1]) {
+    const thr = new THREE.InstancedMesh(lampGeo, thrMat, 8);
+    for (let i = 0; i < 8; i++) {
+      m.identity();
+      m.setPosition(x + side * (length / 2 + 6), elevation + 1, z - 21 + i * 6);
+      thr.setMatrixAt(i, m);
+    }
+    group.add(thr);
+  }
+
+  g.add(group);
+  return { runwayLights: lights };
+}
+
+export function createLandmarks(grid) {
+  const group = new THREE.Group();
+  group.name = 'landmarks';
+  const mats = {
+    concrete: M.concrete(), steel: M.steel(), red: M.red(),
+    glass: M.glass(), dark: M.dark(), asphalt: M.asphalt(),
+    grass: M.grass(), marking: M.marking(),
+  };
+  const beacons = [];
+  let wheel = null;
+
+  for (const L of LANDMARKS) {
+    switch (L.type) {
+      case 'spire': beacons.push(buildSpire(group, grid, L, mats)); break;
+      case 'obelisk': beacons.push(buildObelisk(group, grid, L, mats)); break;
+      case 'stadium': buildStadium(group, grid, L, mats); break;
+      case 'bridge': buildBridge(group, grid, L, mats); break;
+      case 'wheel': wheel = buildWheel(group, grid, L, mats); break;
+      case 'cranes': buildCranes(group, grid, L, mats); break;
+      case 'dam': buildDam(group, grid, L, mats); break;
+      case 'atc': beacons.push(buildControlTower(group, grid, L, mats)); break;
+      case 'marina': buildMarina(group, grid, L, mats); break;
+      default: break; // 'park' and 'peak' are terrain features, not structures
+    }
+  }
+
+  const trees = buildVegetation(group);
+  const airport = buildAirport(group, grid, mats);
+
+  group.userData.animated = { beacons, wheel, runwayLights: airport.runwayLights };
+  group.userData.stats = { trees };
+  group.userData.dispose = () => {
+    group.traverse((o) => { if (o.isMesh) o.geometry?.dispose?.(); });
+    for (const mm of Object.values(mats)) mm.dispose();
+  };
+  return group;
+}
+
+/** Beacon blink and the wheel turning: cheap signs that the city is running (§29). */
+export function animateLandmarks(group, dt, elapsed) {
+  const a = group.userData.animated;
+  if (!a) return;
+  const blink = elapsed % 1.6 < 0.5 ? 1 : 0.12;
+  for (const b of a.beacons) if (b) b.material.opacity = blink;
+  if (a.wheel) a.wheel.rotation.z += dt * 0.09;
+}

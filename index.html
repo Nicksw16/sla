@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>SKYLINE FLIGHT</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%E2%9C%88%EF%B8%8F%3C/text%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/src/styles.css" />
+</head>
+<body>
+  <canvas id="viewport"></canvas>
+
+  <!-- ============ IN-FLIGHT HUD ============ -->
+  <div id="hud" class="layer hidden" aria-hidden="true">
+    <div class="hud-corner tl">
+      <div id="hud-mission-name">FREE FLIGHT</div>
+      <div id="hud-objective" class="objective"></div>
+      <div id="hud-timer" class="timer hidden"><span id="hud-timer-value">0:00</span></div>
+      <div id="hud-progress" class="cp-progress hidden">CHECKPOINT <span id="hud-cp-cur">0</span>/<span id="hud-cp-total">0</span></div>
+    </div>
+
+    <div class="hud-corner tr">
+      <div id="hud-score" class="score">0</div>
+      <div id="hud-combo" class="combo hidden">x<span id="hud-combo-value">1.0</span></div>
+      <div id="hud-rival" class="rival hidden"><span class="rival-label">RIVAL</span> <span id="hud-rival-gap">--</span></div>
+    </div>
+
+    <div class="hud-corner bl">
+      <div class="gauge">
+        <div id="hud-speed" class="gauge-value">0</div>
+        <div class="gauge-unit">KM/H</div>
+      </div>
+      <div class="gauge small">
+        <div id="hud-alt" class="gauge-value">0</div>
+        <div class="gauge-unit">M ALT</div>
+      </div>
+      <div id="hud-agl" class="agl hidden">AGL <span id="hud-agl-value">0</span></div>
+    </div>
+
+    <div class="hud-corner br">
+      <canvas id="minimap" width="200" height="200"></canvas>
+      <div id="minimap-label">SKYLINE CITY</div>
+    </div>
+
+    <div class="hud-bars">
+      <div class="bar-row"><span class="bar-label">THR</span><div class="bar"><div id="bar-throttle" class="bar-fill thr"></div></div></div>
+      <div class="bar-row"><span class="bar-label">TRB</span><div class="bar"><div id="bar-turbo" class="bar-fill trb"></div></div></div>
+      <div class="bar-row"><span class="bar-label">HULL</span><div class="bar"><div id="bar-hp" class="bar-fill hp"></div></div></div>
+    </div>
+
+    <div id="nav-marker" class="nav-marker hidden">
+      <div class="nav-ring"></div>
+      <div class="nav-dist">0 m</div>
+    </div>
+    <div id="nav-edge" class="nav-edge hidden"></div>
+
+    <div id="horizon" class="horizon">
+      <div class="horizon-line"><span class="hz-tick left"></span><span class="hz-center"></span><span class="hz-tick right"></span></div>
+    </div>
+
+    <div id="toast-stack" class="toast-stack"></div>
+    <div id="popup-stack" class="popup-stack"></div>
+    <div id="warn-stall" class="big-warn hidden">STALL — LOWER THE NOSE</div>
+    <div id="warn-pullup" class="big-warn danger hidden">PULL UP</div>
+    <div id="vignette" class="vignette"></div>
+  </div>
+
+  <!-- ============ SCREENS ============ -->
+  <div id="screens" class="layer">
+    <section id="screen-loading" class="screen active">
+      <div class="logo-wrap">
+        <h1 class="logo">SKYLINE<span>FLIGHT</span></h1>
+        <div class="loader"><div id="loader-fill"></div></div>
+        <div id="loading-text" class="loading-text">BUILDING SKYLINE CITY…</div>
+      </div>
+    </section>
+
+    <section id="screen-main" class="screen">
+      <div class="menu-panel">
+        <h1 class="logo small">SKYLINE<span>FLIGHT</span></h1>
+        <div id="pilot-strip" class="pilot-strip"></div>
+        <nav class="menu-list">
+          <button class="menu-btn primary" data-action="continue">FLY</button>
+          <button class="menu-btn" data-action="map">MISSIONS &amp; MAP</button>
+          <button class="menu-btn" data-action="hangar">HANGAR</button>
+          <button class="menu-btn" data-action="freeflight">FREE FLIGHT</button>
+          <button class="menu-btn" data-action="stats">STATISTICS</button>
+          <button class="menu-btn" data-action="settings">SETTINGS</button>
+        </nav>
+        <div class="hint">Enter to confirm · Arrows to navigate · Esc to go back</div>
+      </div>
+    </section>
+
+    <section id="screen-map" class="screen">
+      <header class="screen-head">
+        <h2>SKYLINE CITY</h2>
+        <div id="map-summary" class="screen-sub"></div>
+        <button class="close-btn" data-action="back">ESC</button>
+      </header>
+      <div class="map-body">
+        <div class="map-grid-wrap">
+          <div id="map-grid" class="map-grid"></div>
+          <div id="map-legend" class="map-legend"></div>
+        </div>
+        <div class="mission-list-wrap">
+          <div id="mission-list" class="mission-list"></div>
+          <div id="mission-detail" class="mission-detail"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="screen-hangar" class="screen">
+      <header class="screen-head">
+        <h2>HANGAR</h2>
+        <div id="hangar-credits" class="screen-sub"></div>
+        <button class="close-btn" data-action="back">ESC</button>
+      </header>
+      <div class="hangar-body">
+        <div id="hangar-list" class="hangar-list"></div>
+        <div class="hangar-stage">
+          <div id="hangar-name" class="hangar-name"></div>
+          <div id="hangar-role" class="hangar-role"></div>
+          <div id="hangar-stats" class="stat-block"></div>
+          <div class="hangar-tabs">
+            <button class="tab active" data-tab="upgrades">UPGRADES</button>
+            <button class="tab" data-tab="paint">PAINT</button>
+          </div>
+          <div id="hangar-upgrades" class="tab-body"></div>
+          <div id="hangar-paint" class="tab-body hidden"></div>
+          <div class="hangar-actions">
+            <button id="hangar-action" class="menu-btn primary"></button>
+          </div>
+        </div>
+      </div>
+      <div class="hint">Drag on the aircraft to orbit · scroll to zoom</div>
+    </section>
+
+    <section id="screen-stats" class="screen">
+      <header class="screen-head">
+        <h2>STATISTICS</h2>
+        <button class="close-btn" data-action="back">ESC</button>
+      </header>
+      <div id="stats-body" class="stats-body"></div>
+    </section>
+
+    <section id="screen-settings" class="screen">
+      <header class="screen-head">
+        <h2>SETTINGS</h2>
+        <button class="close-btn" data-action="back">ESC</button>
+      </header>
+      <div id="settings-body" class="settings-body"></div>
+    </section>
+
+    <section id="screen-results" class="screen">
+      <div class="results-panel">
+        <h2 id="results-title">MISSION COMPLETE</h2>
+        <div id="results-stars" class="stars"></div>
+        <div id="results-rows" class="results-rows"></div>
+        <div id="results-records" class="results-records"></div>
+        <div id="results-unlocks" class="results-unlocks"></div>
+        <div class="results-actions">
+          <button class="menu-btn primary" data-action="retry">RETRY</button>
+          <button class="menu-btn" data-action="next">NEXT</button>
+          <button class="menu-btn" data-action="tomenu">MENU</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="screen-pause" class="screen">
+      <div class="menu-panel narrow">
+        <h2>PAUSED</h2>
+        <div id="pause-mission" class="screen-sub"></div>
+        <nav class="menu-list">
+          <button class="menu-btn primary" data-action="resume">RESUME</button>
+          <button class="menu-btn" data-action="restart">RESTART</button>
+          <button class="menu-btn" data-action="settings">SETTINGS</button>
+          <button class="menu-btn" data-action="quit">QUIT TO MENU</button>
+        </nav>
+      </div>
+    </section>
+
+    <section id="screen-briefing" class="screen">
+      <div class="briefing-panel">
+        <div id="briefing-type" class="briefing-type"></div>
+        <h2 id="briefing-name"></h2>
+        <p id="briefing-desc"></p>
+        <div id="briefing-goals" class="briefing-goals"></div>
+        <div id="briefing-conditions" class="briefing-conditions"></div>
+        <div class="results-actions">
+          <button class="menu-btn primary" data-action="launch">LAUNCH</button>
+          <button class="menu-btn" data-action="back">BACK</button>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div id="cinematic-bars" class="cine hidden"><i></i><i></i></div>
+  <div id="fade" class="fade"></div>
+  <div id="fps" class="fps hidden">0</div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
