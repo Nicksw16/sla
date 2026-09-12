@@ -101,6 +101,13 @@ export function collisionHeight(x, z) {
  * and landing missions become unflyable — which is exactly what the content tests
  * caught. The airport's own buildings are placed deliberately by Landmarks.
  */
+/** Central Park, kept clear of buildings so it stays the green void it is meant to be. */
+export const PARK = { x: -620, z: 640, radius: 250 };
+
+export function isParkZone(x, z) {
+  return Math.hypot(x - PARK.x, z - PARK.z) < PARK.radius;
+}
+
 export function isAirportClearZone(x, z) {
   const dx = Math.abs(x - RUNWAY.x);
   const dz = z - RUNWAY.z;
@@ -275,7 +282,9 @@ export function createUrbanTexture(regions, regionOrder, tile) {
       }
       const n = fbm2D(x * 0.0009, z * 0.0009, 2, 23);
       v *= 0.72 + n * 0.5;
-      if (isWater(x, z)) v = 0;
+      // No streets over water, and none across the airport: the movement area is
+      // concrete, and a road grid painted over the apron reads as a mistake.
+      if (isWater(x, z) || isAirportClearZone(x, z)) v = 0;
       data[j * size + i] = Math.round(clamp01(v) * 255);
     }
   }

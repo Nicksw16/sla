@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { clamp, clamp01, lerp, smoothstep } from '../core/MathUtils.js';
 import { Rng, fbm2D } from '../core/Rng.js';
 import { REGIONS, REGION_ORDER, TILE } from '../data/regions.js';
-import { terrainHeight, isWater, isAirportClearZone } from './Terrain.js';
+import { terrainHeight, isWater, isAirportClearZone, isParkZone } from './Terrain.js';
 
 /**
  * Procedural city.
@@ -378,7 +378,7 @@ export function generateCity({ seed = 20260912, detail = 1 } = {}) {
         const bx = start + i * PERIOD;
         const bz = startZ + j * PERIOD;
         if (isWater(bx, bz)) continue;
-        if (isAirportClearZone(bx, bz)) continue;
+        if (isAirportClearZone(bx, bz) || isParkZone(bx, bz)) continue;
 
         // Density varies inside a district so it never looks stamped out.
         const localDensity = b.density * (0.65 + 0.5 * fbm2D(bx * 0.0011, bz * 0.0011, 2, 7));
@@ -408,7 +408,7 @@ export function generateCity({ seed = 20260912, detail = 1 } = {}) {
           const jitter = Math.max(0, (cellSize - Math.max(fw, fd)) * 0.4);
           const x = bx + cx * cellSize + rng.range(-jitter, jitter);
           const z = bz + cz * cellSize + rng.range(-jitter, jitter);
-          if (isWater(x, z) || isAirportClearZone(x, z)) continue;
+          if (isWater(x, z) || isAirportClearZone(x, z) || isParkZone(x, z)) continue;
 
           const type = buildingTypeFor(region, rng);
           let height = lerp(b.minH, b.maxH, Math.pow(rng.next(), 1.7)) * coreBias;
