@@ -193,8 +193,11 @@ export class WorldManager {
     this.grade = {
       // Open up after dark so the city reads, close down under a noon sun.
       exposure: 1.02 + night * 0.22 - Math.max(0, tod.sunDir.y) * 0.1,
-      // The city is its own light source at night, so that is when bloom earns its keep.
-      bloom: 0.28 + night * 0.5 + dusk * 0.18,
+      // The city is its own light source at night, so that is when bloom earns its
+      // keep. Eased back from 0.5 now that lit windows, lamp heads and roof beacons
+      // emit above 1.0 on purpose: the bloom has far more to find than it used to,
+      // and at the old strength the windows fused into one glowing smear.
+      bloom: 0.28 + night * 0.34 + dusk * 0.18,
       // Shadows toward the sky, highlights toward the sun.
       lift: {
         r: tod.state.ambColor.r * 0.045 * (0.4 + night),
@@ -237,6 +240,13 @@ export class WorldManager {
     // --- night: city windows and street lights
     if (this.city.userData.facadeUniforms) {
       this.city.userData.facadeUniforms.uNight.value = night;
+      // Drives the rooftop obstruction beacons, which have to keep blinking whether
+      // or not the clock is running.
+      this.city.userData.facadeUniforms.uTime.value = this.elapsed;
+      // The sodium wash off the streets dims in rain, because there is less dry road
+      // left to bounce it.
+      this.city.userData.facadeUniforms.uCityGlow.value
+        .set(0xff9a4a).multiplyScalar(0.55 + 0.45 * wx.current.visibility);
       // Daylight bounce onto the walls, cut back at night so the lit windows carry
       // the contrast instead of competing with a grey wash.
       this.city.userData.facadeUniforms.uFill.value =

@@ -44,6 +44,12 @@ function facadeMaterial() {
     uNight: { value: 0 },
     uWindowWarm: { value: new THREE.Color(0xffd49a) },
     uWindowCool: { value: new THREE.Color(0xcfe6ff) },
+    // The sodium wash the streets throw back up. The lower floors of a real building
+    // are never as black as the upper ones, because the road below is a light source
+    // pointed at them - a survey of Madrid's night emissions put street lighting at
+    // 54% of everything a city sends upward, against 9% for homes.
+    uCityGlow: { value: new THREE.Color(0xff9a4a) },
+    uTime: { value: 0 },
     // Bounce light onto vertical faces. Without it the shadowed side of every tower
     // is a black slab and none of the detail below survives to be seen.
     uFill: { value: 0.3 },
@@ -56,6 +62,8 @@ function facadeMaterial() {
     shader.uniforms.uNight = mat.userData.uniforms.uNight;
     shader.uniforms.uWindowWarm = mat.userData.uniforms.uWindowWarm;
     shader.uniforms.uWindowCool = mat.userData.uniforms.uWindowCool;
+    shader.uniforms.uCityGlow = mat.userData.uniforms.uCityGlow;
+    shader.uniforms.uTime = mat.userData.uniforms.uTime;
     shader.uniforms.uFill = mat.userData.uniforms.uFill;
     shader.uniforms.uSkyTint = mat.userData.uniforms.uSkyTint;
     shader.uniforms.uSunTint = mat.userData.uniforms.uSunTint;
@@ -72,6 +80,7 @@ function facadeMaterial() {
         varying float vGlass;
         varying float vStyle;
         varying float vGround;
+        varying float vWorldY;
         varying vec3 vFaceNormal;`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>
         vLocal = position * aSize;
@@ -80,12 +89,18 @@ function facadeMaterial() {
         vGlass = aGlass;
         vStyle = aStyle;
         vGround = aGround;
-        vFaceNormal = normal;`);
+        vFaceNormal = normal;
+        // Height above sea level, not above this mass. A tower is built from stacked
+        // masses, so a mass that starts forty metres up has its own base at zero -
+        // which would hand the street glow below to a floor nowhere near the street.
+        vWorldY = (instanceMatrix * vec4(position, 1.0)).y;`);
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>
         uniform float uNight;
         uniform vec3 uWindowWarm;
         uniform vec3 uWindowCool;
+        uniform vec3 uCityGlow;
+        uniform float uTime;
         uniform float uFill;
         uniform vec3 uSkyTint;
         uniform vec3 uSunTint;
@@ -95,6 +110,7 @@ function facadeMaterial() {
         varying float vGlass;
         varying float vStyle;
         varying float vGround;
+        varying float vWorldY;
         varying vec3 vFaceNormal;
         float hash12(vec2 p) {
           vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -184,12 +200,36 @@ function facadeMaterial() {
           fStruct *= 1.0 - 0.16 * sill * fNear;
           fStruct *= 1.0 - 0.1 * mech * fNear;
 
-          // Lights come on by floor and by room rather than at random; crisp near,
-          // an even glow far, because a hard step a few pixels wide crawls.
+          // --- which windows are burning
+          //
+          // The thing that made this read as noise rather than as a building was
+          // lighting every window independently: real light comes from a room, and a room
+          // is wider than one window. Following Chandler/Yang/Ren, rooms are defined
+          // by quantising the bay index, and the whole room lights as one - so lit
+          // windows arrive in runs of two and three, with dark runs between them,
+          // which is the actual texture of a city at night.
+          float roomSpan = 1.0 + floor(hash12(vec2(fFloor * 1.7, vSeed * 2.3)) * 3.0);
+          float roomIdx = floor(fBay / roomSpan);
           float floorLife = hash12(vec2(fFloor * 2.3, vSeed * 5.0));
-          fRoom = hash12(vec2(fBay, fFloor + vSeed * 13.0));
+          fRoom = hash12(vec2(roomIdx * 3.1 + 0.5, fFloor + vSeed * 13.0));
           float occupancy = mix(0.62, 0.34, step(0.5, vStyle));
-          float litSharp = step(occupancy, fRoom * 0.55 + floorLife * 0.45) * glassPane;
+          // Smoothstep rather than step: the same threshold can then be walked over
+          // dusk to bring the city up window by window instead of all at once.
+          float litSharp = smoothstep(occupancy - 0.05, occupancy + 0.05,
+            fRoom * 0.62 + floorLife * 0.38) * glassPane;
+
+          // Blinds. A quarter of lit windows have one part-drawn, which breaks the
+          // pane into a bright strip and a dim one - without this every lit window is
+          // an identical filled rectangle, and a wall of identical rectangles is what
+          // made the old city look like a spreadsheet.
+          float blindRoll = hash12(vec2(fBay * 5.7 + 1.3, fFloor + vSeed * 4.0));
+          float blindDrop = step(0.70, blindRoll) * (0.30 + 0.45 * fract(blindRoll * 17.0));
+          float paneY = clamp((fy - 0.24) / 0.66, 0.0, 1.0);
+          litSharp *= mix(1.0, smoothstep(blindDrop - 0.04, blindDrop + 0.02, 1.0 - paneY), fNear);
+
+          // Interior depth: the ceiling of a lit room is the brightest part of it and
+          // the floor falls away into shadow, so the pane is graded rather than flat.
+          litSharp *= mix(1.0, 0.55 + 0.75 * paneY, fNear * 0.85);
           // Far away the windows are sub-pixel and collapse into one average, which has
           // to be weighted by how much of the wall is actually glass. Emitting the
           // per-window brightness across the whole facade lit the distant city like
@@ -230,11 +270,54 @@ function facadeMaterial() {
           // eye sees of a facade from half a kilometre anyway.
           diffuseColor.rgb = mix(mix(wall, glassCol, 0.42 * (0.5 + vGlass * 0.5)), lit_wall, fNear);
 
-          // Offices burn cool and even; homes burn warm and patchy.
-          vec3 lampColour = mix(uWindowCool, uWindowWarm, clamp(vStyle + hash12(vec2(fBay, fFloor)) * 0.5, 0.0, 1.0));
-          totalEmissiveRadiance += lampColour * fLit * uNight * (0.5 + 0.32 * fRoom);
+          // --- what colour the light in a room actually is
+          //
+          // One white was the flattest thing about the old night city. Interiors run
+          // across a wide range of colour temperature: incandescent at 2500-3000K
+          // reads orange, fluorescent around 4000K reads yellow-green, modern cool
+          // LED is up past 5500K, and a television in an unlit room throws blue.
+          // Sorting rooms across those four is most of what makes a wall of windows
+          // look inhabited rather than printed.
+          vec3 tungsten = vec3(1.00, 0.69, 0.38);
+          vec3 fluoro   = vec3(1.00, 0.94, 0.76);
+          vec3 coolLed  = vec3(0.80, 0.88, 1.00);
+          vec3 screen   = vec3(0.38, 0.56, 1.00);
+          float tone = hash12(vec2(fRoom * 31.7, vSeed * 2.9));
+          // Offices lean cool and uniform, homes lean warm and varied: vStyle is 0 for
+          // an office tower and climbs for housing and sheds.
+          tone = clamp(tone - vStyle * 0.3, 0.0, 1.0);
+          vec3 lampColour = mix(coolLed, fluoro, smoothstep(0.0, 0.45, tone));
+          lampColour = mix(lampColour, tungsten, smoothstep(0.45, 0.95, tone));
+          // One room in forty is somebody watching something in the dark.
+          lampColour = mix(lampColour, screen, step(0.975, hash12(vec2(fRoom * 7.1, vSeed))));
+
+          // Brightness is not uniform either - squaring a uniform hash gives mostly
+          // ordinary rooms and a few that blaze, which is how a real facade reads.
+          float watt = 0.34 + 1.5 * pow(hash12(vec2(fRoom * 13.3, vSeed * 1.7)), 2.0);
+
+          // Beyond the distance where a room is a pixel wide, its colour and wattage
+          // are being sampled at random from one frame to the next, which crawls. Both
+          // fade to the average of the district instead, so a far tower is a steady
+          // warm glow rather than a block of static.
+          lampColour = mix(vec3(0.97, 0.88, 0.74), lampColour, fNear);
+          watt = mix(0.9, watt, fNear);
+          // Above 1 on purpose: these are light sources, and the bloom downstream is
+          // what turns a bright pane into something that glows rather than a pale
+          // square. Clamped emissive can never do that.
+          totalEmissiveRadiance += lampColour * fLit * uNight * watt * (0.6 + 0.5 * fRoom);
+
           // Shopfronts stay lit after dark and spill onto the pavement.
-          totalEmissiveRadiance += uWindowWarm * fShop * uNight * 0.85 * mix(0.4, 1.0, fNear);
+          totalEmissiveRadiance += uWindowWarm * fShop * uNight * 1.15 * mix(0.4, 1.0, fNear);
+
+          // The street is a light source pointing up. Without this the bottom of every
+          // tower was as black as the top, which is the one thing a night photograph of
+          // a city never shows: the first few floors always carry a sodium wash.
+          // Tight: a street lamp is a small source close to the ground, so its bounce
+          // is spent within the first few floors. Spread up the whole tower it stops
+          // being a wash of light off the road and turns the entire city sepia.
+          float streetBounce = exp(-max(vWorldY, 0.0) * 0.085);
+          totalEmissiveRadiance += uCityGlow * uNight * streetBounce * 0.20 * fWear * fStruct;
+
           // Sky and street bounce, so a facade out of the sun still shows its face.
           totalEmissiveRadiance += diffuseColor.rgb * uFill;
         } else {
@@ -249,6 +332,39 @@ function facadeMaterial() {
             step(abs(rp.x + halfSize.x * 0.35), 2.2) * step(abs(rp.y - halfSize.y * 0.3), 1.8);
           diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.32, 0.16, 0.13), hut);
           totalEmissiveRadiance += diffuseColor.rgb * uFill * 0.5;
+
+          // Skyglow. A roof at night is not black: it faces straight up into the
+          // orange dome a city throws over itself, and low roofs catch the street
+          // as well. Without this every block reads as a hole punched in the map.
+          // Kept deliberately faint. Seen from altitude the roofs are most of the
+          // city's surface area, so anything more than a hint here stops reading as
+          // skyglow and starts reading as a field of brown tiles - which costs the
+          // one thing the view from up here needs: a dark mass with lights in it.
+          totalEmissiveRadiance += uSkyTint * uNight * 0.022;
+          totalEmissiveRadiance += uCityGlow * uNight * exp(-max(vWorldY, 0.0) * 0.055) * 0.035;
+
+          // Obstruction lighting. Anything tall enough to be a hazard to aircraft
+          // carries a red beacon, and a skyline of them slowly winking out of step is
+          // one of the few details that reads from kilometres away - which, in a
+          // flying game, is most of where the city is ever seen from.
+          float tall = smoothstep(55.0, 85.0, vWorldY);
+          if (tall > 0.0) {
+            // Near the middle of the roof, and sized against the roof it sits on: a
+            // fixed two-metre lamp swallows the whole top of a slender tower, which
+            // turned the skyline into a row of red traffic cones.
+            float beaconRadius = min(1.5, 0.16 * min(vSize.x, vSize.z));
+            float beaconR = 1.0 - smoothstep(beaconRadius * 0.45, beaconRadius, length(rp));
+            // Each building keeps its own period and phase, so they never pulse
+            // together - a city blinking in unison looks like one machine.
+            float period = 1.7 + hash12(vec2(vSeed * 3.7, 9.0)) * 1.4;
+            float phase = fract(uTime / period + hash12(vec2(vSeed, 5.0)));
+            float flash = pow(max(0.0, sin(phase * 3.14159)), 8.0);
+            // Obstruction lights are on around the clock in real life, but a lamp that
+            // holds its own against the sun is reading as a painted red disc rather
+            // than as a light, so daylight pulls it back to a hint.
+            totalEmissiveRadiance += vec3(1.0, 0.06, 0.03) * beaconR * tall * flash
+              * (0.22 + 0.78 * uNight) * 3.2;
+          }
         }`);
   };
   return mat;

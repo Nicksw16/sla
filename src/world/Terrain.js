@@ -280,11 +280,48 @@ function groundMaterial(urbanTexture, period, roadWidth) {
           float repair = hashT(floor(along / 7.0));
           c *= 1.0 - paved * urban * sharp * 0.10 * step(0.72, repair);
 
-          // Sodium street lighting after dark, pooled under the lamps rather than even.
-          float lampX = 1.0 - smoothstep(0.0, 5.0, abs(mod(along.x, 32.0) - 16.0));
-          float lampZ = 1.0 - smoothstep(0.0, 5.0, abs(mod(along.y, 32.0) - 16.0));
-          float pools = mix(0.55, 1.0, max(lampX, lampZ) * sharp);
-          totalEmissiveRadiance += vec3(1.0, 0.72, 0.34) * paved * urban * uNight * 0.24 * pools;
+          // --- street lighting after dark
+          //
+          // This used to be a flat wash: the pool term never fell below 0.55, so every
+          // road in the city emitted amber from end to end and the whole street grid
+          // came out the colour of sand under a midnight sky. Real street lighting is
+          // the opposite shape - small bright pools with genuinely dark road between
+          // them, which is what gives a night city its rhythm from the air.
+          //
+          // Lamps stand along the kerb, spaced about 30 m, and light the road across
+          // its width rather than in a blob: two separate falloffs, one along the road
+          // and one across it.
+          float lampSpacing = 30.0;
+          float alongX = 1.0 - smoothstep(1.2, 7.0, abs(mod(along.x + 15.0, lampSpacing) - lampSpacing * 0.5));
+          float alongZ = 1.0 - smoothstep(1.2, 7.0, abs(mod(along.y + 15.0, lampSpacing) - lampSpacing * 0.5));
+          // Which way this piece of road runs decides which spacing applies to it.
+          float runsZ = step(gd.x, gd.y);
+          float acrossRoad = 1.0 - smoothstep(uRoad * 0.15, uRoad * 0.55, mix(gd.y, gd.x, runsZ));
+          float pool = mix(alongX, alongZ, runsZ) * acrossRoad;
+
+          // Sodium, not white: low-pressure sodium street lighting is close to
+          // monochromatic orange, and even the high-pressure lamps that replaced it
+          // stay well down the warm end. The LED retrofit is cooler, so a few
+          // junctions run white to keep the grid from being one note.
+          vec3 sodium = vec3(1.00, 0.62, 0.22);
+          vec3 ledWhite = vec3(0.85, 0.90, 1.00);
+          float ledRun = step(0.78, hashT(floor(along / 180.0)));
+          vec3 lampTint = mix(sodium, ledWhite, ledRun);
+
+          // Far off, the pools are smaller than a pixel and have to collapse into an
+          // average rather than crawl - but a dim average, not the old 0.55.
+          float poolFar = 0.06;
+          float poolMix = mix(poolFar, pool, sharp);
+          totalEmissiveRadiance += lampTint * paved * urban * uNight * 0.30 * poolMix;
+
+          // The lamp head itself: a small hot point the bloom can catch, so from the
+          // air the streets are strings of lights rather than glowing stripes.
+          float headAlong = mix(
+            1.0 - smoothstep(0.0, 1.6, abs(mod(along.x + 15.0, lampSpacing) - lampSpacing * 0.5)),
+            1.0 - smoothstep(0.0, 1.6, abs(mod(along.y + 15.0, lampSpacing) - lampSpacing * 0.5)),
+            runsZ);
+          float kerbLine = 1.0 - smoothstep(0.6, 2.4, abs(mix(gd.y, gd.x, runsZ) - uRoad * 0.52));
+          totalEmissiveRadiance += lampTint * headAlong * kerbLine * urban * uNight * sharp * 2.4;
         }
 
         // Central Park: a green void in the middle of the densest district (§25).
