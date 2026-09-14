@@ -55,8 +55,17 @@ export class HangarScene {
     this.scene.add(grid);
 
     // The screen's panels occupy the left of the viewport, so the aircraft is framed
-    // to the right of centre rather than hidden behind them.
-    this.framingShift = -7;
+    // to the right of centre rather than hidden behind them. This is a fraction of
+    // the half-frame, applied in view space - see update(). Expressing it as metres
+    // in world space, which is what it used to be, is what made the aircraft drift
+    // out of shot: a fixed world offset rotates with the camera, so it framed the
+    // aircraft correctly from one angle and swung it off the edge from the opposite
+    // one.
+    this.framingFrac = -0.34;
+    // The point the camera orbits and aims at: the centre of whatever is on the pad.
+    this.target = new THREE.Vector3(0, 0.5, 0);
+    this._box = new THREE.Box3();
+    this._right = new THREE.Vector3();
     this.model = null;
     this.telemetry = {
       throttle: 0.35, turbo: false, gearDown: true, speed: 0, speedFrac: 0,
@@ -73,6 +82,12 @@ export class HangarScene {
     }
     this.model = buildAircraft(spec, paintId);
     this.scene.add(this.model);
+    // Orbit the aircraft itself, not the world origin. The models are not centred on
+    // their own origin - a fuselage runs from -length/2 to +length/2 but the wings,
+    // fin and undercarriage are nowhere near symmetric about it - so aiming at the
+    // origin leaves the aircraft sitting off to one side of its own turntable.
+    this._box.setFromObject(this.model);
+    this._box.getCenter(this.target);
     // Frame the aircraft regardless of how big it is.
     this.targetDistance = clamp(spec.model.length * 2.0 + spec.model.wingspan * 0.9, 18, 52);
   }
@@ -94,13 +109,27 @@ export class HangarScene {
     this.pitch = damp(this.pitch, this.targetPitch, 8, dt);
     this.distance = damp(this.distance, this.targetDistance, 6, dt);
 
+    // Orbit a sphere centred on the aircraft, and aim at the same point, so the
+    // aircraft is pinned to one spot in frame however far round the turntable goes.
     const cp = Math.cos(this.pitch);
     this.camera.position.set(
-      Math.sin(this.yaw) * cp * this.distance,
-      Math.sin(this.pitch) * this.distance + 2.2,
-      Math.cos(this.yaw) * cp * this.distance,
+      this.target.x + Math.sin(this.yaw) * cp * this.distance,
+      this.target.y + Math.sin(this.pitch) * this.distance,
+      this.target.z + Math.cos(this.yaw) * cp * this.distance,
     );
-    this.camera.lookAt(this.framingShift, 0.5, 0);
+    this.camera.lookAt(this.target);
+
+    // Then slide the camera sideways in its own frame to put the aircraft right of
+    // centre, clear of the panels. Done after the aim, so the viewing direction is
+    // unchanged and the offset is the same from every angle. Scaled by distance and
+    // field of view, so it holds at any zoom and for any size of aircraft.
+    if (this.framingFrac !== 0) {
+      const vHalf = (this.camera.fov * Math.PI) / 360;
+      const hHalf = Math.atan(Math.tan(vHalf) * this.camera.aspect);
+      const shift = this.framingFrac * this.distance * Math.tan(hHalf);
+      this._right.set(1, 0, 0).applyQuaternion(this.camera.quaternion);
+      this.camera.position.addScaledVector(this._right, shift);
+    }
 
     if (this.model) {
       // Idle animation: the prop turns and the surfaces breathe, so the aircraft on
@@ -116,7 +145,7 @@ export class HangarScene {
   resize(width, height) {
     this.camera.aspect = width / height;
     // On a narrow screen the panels stack and the aircraft belongs in the middle.
-    this.framingShift = width < 900 ? 0 : -7;
+    this.framingFrac = width < 900 ? 0 : -0.34;
     this.camera.updateProjectionMatrix();
   }
 
