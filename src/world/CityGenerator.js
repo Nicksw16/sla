@@ -47,12 +47,18 @@ function facadeMaterial() {
     // Bounce light onto vertical faces. Without it the shadowed side of every tower
     // is a black slab and none of the detail below survives to be seen.
     uFill: { value: 0.3 },
+    // The sky of the moment, so glazing reflects the sky the player is flying under
+    // rather than a colour chosen at build time.
+    uSkyTint: { value: new THREE.Color(0x9dc4e8) },
+    uSunTint: { value: new THREE.Color(0xfff2d8) },
   };
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.uNight = mat.userData.uniforms.uNight;
     shader.uniforms.uWindowWarm = mat.userData.uniforms.uWindowWarm;
     shader.uniforms.uWindowCool = mat.userData.uniforms.uWindowCool;
     shader.uniforms.uFill = mat.userData.uniforms.uFill;
+    shader.uniforms.uSkyTint = mat.userData.uniforms.uSkyTint;
+    shader.uniforms.uSunTint = mat.userData.uniforms.uSunTint;
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', `#include <common>
         attribute float aSeed;
@@ -81,6 +87,8 @@ function facadeMaterial() {
         uniform vec3 uWindowWarm;
         uniform vec3 uWindowCool;
         uniform float uFill;
+        uniform vec3 uSkyTint;
+        uniform vec3 uSunTint;
         varying vec3 vLocal;
         varying vec3 vSize;
         varying float vSeed;
@@ -97,22 +105,38 @@ function facadeMaterial() {
         float stripe(float v, float width, float soft) {
           return smoothstep(width + soft, width, abs(v));
         }`)
-      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+      // The facade pattern is worked out at the roughness hook, which runs before the
+      // lighting does, so the same masks that draw a window can also tell the renderer
+      // that the window is smooth glass and the wall around it is rough concrete. That
+      // is what makes the two catch the sun differently instead of shading as one
+      // plastic surface (spec §116).
+      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
         vec3 an = abs(vFaceNormal);
         float heightAboveBase = vLocal.y + vSize.y * 0.5;
+        bool onWall = an.y < 0.5;
 
-        if (an.y < 0.5) {
-          // --- which facade are we on, and where on it
+        float fGlass = 0.0;   // 1 where the surface is glazing
+        float fShop = 0.0;    // 1 in a lit shopfront
+        float fLit = 0.0;     // how brightly this window burns after dark
+        float fRoom = 0.0;    // per-room variation, for lamp colour and brightness
+        float fBay = 0.0;
+        float fFloor = 0.0;
+        float fNear = 1.0;    // 1 close up, 0 once the pattern is sub-pixel
+        float fWear = 1.0;    // concrete shading, dirt and banding
+        float fStruct = 1.0;  // slabs, mullions, sills darkening the wall
+        float fParapet = 0.0;
+
+        if (onWall) {
           bool facingX = an.x > an.z;
           vec2 uvw = facingX ? vec2(vLocal.z, vLocal.y) : vec2(vLocal.x, vLocal.y);
           float faceWidth = facingX ? vSize.z : vSize.x;
 
           // Window grid in metres. Houses get smaller, squarer windows than offices,
           // and industrial sheds get wide bands.
-          float floorH = mix(3.7, 3.0, step(0.5, vStyle)) ;
+          float floorH = mix(3.7, 3.0, step(0.5, vStyle));
           float bayW = vStyle > 1.5 ? 6.2 : (vStyle > 0.5 ? 3.4 : 4.2);
-          float floorIdx = floor(heightAboveBase / floorH);
-          float bayIdx = floor((uvw.x + faceWidth * 0.5) / bayW);
+          fFloor = floor(heightAboveBase / floorH);
+          fBay = floor((uvw.x + faceWidth * 0.5) / bayW);
           float fy = fract(heightAboveBase / floorH);
           float fx = fract((uvw.x + faceWidth * 0.5) / bayW);
 
@@ -121,88 +145,110 @@ function facadeMaterial() {
           float mullion = stripe(fx - 0.5, 0.42, 0.03);
           float sill = stripe(fy - 0.2, 0.03, 0.015);
 
-          // Glass occupies the middle of each bay, above the sill.
           float glassPane = step(0.2, fx) * step(fx, 0.8) * step(0.24, fy) * step(fy, 0.9);
-
           // Every eighth floor or so is plant: solid, louvred, no glass.
-          float mech = step(0.93, hash12(vec2(floorIdx * 0.37, vSeed)));
+          float mech = step(0.93, hash12(vec2(fFloor * 0.37, vSeed)));
           glassPane *= 1.0 - mech;
 
           // The mass that stands on the ground gets a taller shopfront at street level.
           float street = vGround * (1.0 - step(5.2, heightAboveBase));
-          float shopGlass = street * step(1.0, heightAboveBase) * step(fx, 0.92) * step(0.08, fx);
-          glassPane = max(glassPane, shopGlass);
-
-          // --- colour
-          // The district palettes were chosen when a facade was one flat colour; with
-          // slabs, mullions and glazing drawn on top they need lifting to keep their
-          // hue instead of reading as shadow.
-          vec3 wall = diffuseColor.rgb * 1.22;
-          // Concrete varies band to band, and columns of cladding vary bay to bay.
-          wall *= 0.93 + 0.09 * hash12(vec2(floorIdx, vSeed * 3.1));
-          wall *= 0.96 + 0.06 * hash12(vec2(bayIdx * 1.7, vSeed));
-          // Corner pilasters: the last half metre of each facade reads as structure.
-          float edge = 1.0 - smoothstep(0.0, 0.6, min(faceWidth * 0.5 - abs(uvw.x), 99.0));
-          wall = mix(wall, wall * 1.12, edge);
-          // Dirt washes down from the sills and pools at the base of the wall.
-          float streak = hash12(vec2(floor(uvw.x * 1.7), vSeed * 7.0));
-          wall *= 1.0 - 0.06 * streak * smoothstep(0.9, 0.1, fy);
-          wall *= mix(0.86, 1.0, smoothstep(0.0, 14.0, heightAboveBase));
-
-          // Glazing reflects the sky rather than swallowing the light, or a tower in
-          // daylight reads as a black slab with a grid on it.
-          // Glass sits a little darker than the concrete around it and picks up the
-          // sky at a glance, rather than reading as a white tile on a dark wall.
-          vec3 glassCol = mix(vec3(0.13, 0.16, 0.20), vec3(0.21, 0.27, 0.33), vGlass);
-          float sheen = pow(1.0 - abs(dot(normalize(vFaceNormal), vec3(0.0, 1.0, 0.0))), 2.0);
-          glassCol += sheen * (1.0 - uNight) * 0.1 * (0.4 + vGlass);
-          glassCol *= mix(1.0, 0.45, uNight);
+          fShop = street * step(1.0, heightAboveBase) * step(fx, 0.92) * step(0.08, fx);
+          glassPane = max(glassPane, fShop);
 
           // Pattern fade. A window grid a few pixels wide turns into crawling speckle,
           // so as the bays shrink on screen the detail blends back into flat wall.
-          float px = fwidth(uvw.x / bayW) + fwidth(heightAboveBase / floorH);
-          float near = 1.0 - smoothstep(0.22, 0.85, px);
+          //
+          // The measure is the smaller of the two axes, not their sum. A facade seen
+          // from above is foreshortened in one direction and perfectly readable in the
+          // other, and summing threw away the readable axis - which made every tower
+          // flatten into a blank slab the moment the player gained any altitude, which
+          // is most of this game.
+          float px = min(fwidth(uvw.x / bayW), fwidth(heightAboveBase / floorH));
+          fNear = 1.0 - smoothstep(0.3, 0.95, px);
+          fGlass = glassPane * fNear;
 
-          vec3 lit_wall = mix(wall, glassCol, glassPane * near);
-          lit_wall *= 1.0 - 0.2 * slab * near * (1.0 - glassPane);
-          lit_wall *= 1.0 - 0.12 * mullion * near * (1.0 - glassPane);
-          lit_wall *= 1.0 - 0.16 * sill * near;
-          lit_wall *= 1.0 - 0.1 * mech * near;
+          // Concrete varies band to band, columns of cladding vary bay to bay, corners
+          // read as structure, and dirt washes down from the sills.
+          fWear = 0.93 + 0.09 * hash12(vec2(fFloor, vSeed * 3.1));
+          fWear *= 0.96 + 0.06 * hash12(vec2(fBay * 1.7, vSeed));
+          float edge = 1.0 - smoothstep(0.0, 0.6, min(faceWidth * 0.5 - abs(uvw.x), 99.0));
+          fWear *= mix(1.0, 1.12, edge);
+          float streak = hash12(vec2(floor(uvw.x * 1.7), vSeed * 7.0));
+          fWear *= 1.0 - 0.06 * streak * smoothstep(0.9, 0.1, fy);
+          // Ambient occlusion where the wall meets the ground: the street is a dark
+          // trough and the bottom of a building sits in it.
+          fWear *= mix(0.74, 1.0, smoothstep(0.0, 16.0, heightAboveBase));
+
+          fStruct = 1.0 - 0.2 * slab * fNear * (1.0 - glassPane);
+          fStruct *= 1.0 - 0.12 * mullion * fNear * (1.0 - glassPane);
+          fStruct *= 1.0 - 0.16 * sill * fNear;
+          fStruct *= 1.0 - 0.1 * mech * fNear;
+
+          // Lights come on by floor and by room rather than at random; crisp near,
+          // an even glow far, because a hard step a few pixels wide crawls.
+          float floorLife = hash12(vec2(fFloor * 2.3, vSeed * 5.0));
+          fRoom = hash12(vec2(fBay, fFloor + vSeed * 13.0));
+          float occupancy = mix(0.62, 0.34, step(0.5, vStyle));
+          float litSharp = step(occupancy, fRoom * 0.55 + floorLife * 0.45) * glassPane;
+          // Far away the windows are sub-pixel and collapse into one average, which has
+          // to be weighted by how much of the wall is actually glass. Emitting the
+          // per-window brightness across the whole facade lit the distant city like
+          // daylight - a block of towers read as a pale speckled slab instead of a dark
+          // mass with points of light in it.
+          float glassFraction = vStyle > 1.5 ? 0.16 : (vStyle > 0.5 ? 0.22 : 0.34);
+          float litSoft = (1.0 - occupancy) * glassFraction;
+          fLit = mix(litSoft, litSharp, fNear);
+        } else {
+          vec2 rp = vec2(vLocal.x, vLocal.z);
+          vec2 halfSize = vec2(vSize.x, vSize.z) * 0.5;
+          fParapet = 1.0 - smoothstep(0.0, 1.4, min(halfSize.x - abs(rp.x), halfSize.y - abs(rp.y)));
+        }
+
+        // Glass is smooth and a little metallic so it takes a specular highlight;
+        // concrete is rough and takes none. Wet weather polishes both.
+        roughnessFactor = mix(0.86, 0.14, fGlass);
+        if (!onWall) roughnessFactor = 0.92 - 0.25 * fParapet;`)
+      // metalnessFactor is declared by the chunk after this one, so it is set there.
+      .replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>
+        metalnessFactor = mix(0.03, 0.55, fGlass);`)
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+        if (onWall) {
+          // The district palettes were chosen when a facade was one flat colour; with
+          // slabs, mullions and glazing drawn on top they need lifting to keep their
+          // hue instead of reading as shadow.
+          vec3 wall = diffuseColor.rgb * 1.22 * fWear;
+
+          // Glazing reflects the sky it is actually standing under. The tint comes from
+          // the same keyframes that light the scene, so the two can never disagree.
+          vec3 glassCol = mix(uSkyTint * 0.34, uSkyTint * 0.5, vGlass);
+          float fres = pow(1.0 - abs(dot(normalize(vFaceNormal), vec3(0.0, 1.0, 0.0))), 2.0);
+          glassCol += uSunTint * fres * (1.0 - uNight) * 0.1 * (0.4 + vGlass);
+          glassCol *= mix(1.0, 0.42, uNight);
+
+          vec3 lit_wall = mix(wall, glassCol, fGlass) * fStruct;
           // What is left at distance: the average of wall and glass, which is what the
           // eye sees of a facade from half a kilometre anyway.
-          diffuseColor.rgb = mix(mix(wall, glassCol, 0.42 * (0.5 + vGlass * 0.5)), lit_wall, near);
+          diffuseColor.rgb = mix(mix(wall, glassCol, 0.42 * (0.5 + vGlass * 0.5)), lit_wall, fNear);
 
-          // --- night: lights come on in clusters, not at random
-          float floorLife = hash12(vec2(floorIdx * 2.3, vSeed * 5.0));
-          float roomLife = hash12(vec2(bayIdx, floorIdx + vSeed * 13.0));
-          float occupancy = mix(0.62, 0.34, step(0.5, vStyle));
-          // Crisp windows near, an even glow far. A hard on/off step a few pixels wide
-          // is the same crawling speckle the wall pattern had, only brighter.
-          float litSharp = step(occupancy, roomLife * 0.55 + floorLife * 0.45) * glassPane;
-          float litSoft = (1.0 - occupancy) * 0.42;
-          float lit = mix(litSoft, litSharp, near) * uNight;
           // Offices burn cool and even; homes burn warm and patchy.
-          vec3 lampColour = mix(uWindowCool, uWindowWarm, clamp(vStyle + hash12(vec2(bayIdx, floorIdx)) * 0.5, 0.0, 1.0));
-          // Distant towers keep a soft glow instead of dissolving into white noise.
-          totalEmissiveRadiance += lampColour * lit * (0.5 + 0.32 * roomLife);
+          vec3 lampColour = mix(uWindowCool, uWindowWarm, clamp(vStyle + hash12(vec2(fBay, fFloor)) * 0.5, 0.0, 1.0));
+          totalEmissiveRadiance += lampColour * fLit * uNight * (0.5 + 0.32 * fRoom);
           // Shopfronts stay lit after dark and spill onto the pavement.
-          totalEmissiveRadiance += uWindowWarm * shopGlass * uNight * 0.85 * mix(0.4, 1.0, near);
+          totalEmissiveRadiance += uWindowWarm * fShop * uNight * 0.85 * mix(0.4, 1.0, fNear);
           // Sky and street bounce, so a facade out of the sun still shows its face.
           totalEmissiveRadiance += diffuseColor.rgb * uFill;
         } else {
           // --- roof: gravel, a parapet rim, and the odd painted marking
           vec2 rp = vec2(vLocal.x, vLocal.z);
           vec2 halfSize = vec2(vSize.x, vSize.z) * 0.5;
-          float toEdge = min(halfSize.x - abs(rp.x), halfSize.y - abs(rp.y));
-          float parapet = 1.0 - smoothstep(0.0, 1.4, toEdge);
           float gravel = hash12(floor(rp * 1.35) + vSeed);
           float rpx = fwidth(rp.x) + fwidth(rp.y);
           diffuseColor.rgb *= 0.8 + 0.1 * gravel * (1.0 - smoothstep(0.4, 1.6, rpx));
-          diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 1.35, parapet);
-          // A red service door / stair head on some roofs.
+          diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 1.35, fParapet);
           float hut = step(0.86, hash12(vec2(vSeed * 11.0, 3.0))) *
             step(abs(rp.x + halfSize.x * 0.35), 2.2) * step(abs(rp.y - halfSize.y * 0.3), 1.8);
           diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.32, 0.16, 0.13), hut);
+          totalEmissiveRadiance += diffuseColor.rgb * uFill * 0.5;
         }`);
   };
   return mat;

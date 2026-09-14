@@ -21,6 +21,7 @@ import { MissionManager, MISSION_STATE } from './mission/MissionManager.js';
 import { Progression } from './progression/Progression.js';
 
 import { ParticleSystem, ContrailSystem, EffectsDirector } from './fx/Effects.js';
+import { PostFX } from './fx/PostFX.js';
 import { AudioManager } from './audio/AudioManager.js';
 import { HUD } from './ui/HUD.js';
 import { Minimap } from './ui/Minimap.js';
@@ -106,6 +107,12 @@ class Game {
     this.renderer.toneMappingExposure = 1.05;
     this._applyRenderScale();
 
+    // Post-processing owns tone mapping when it is on, so the renderer keeps its own
+    // only as the fallback path for the low preset and the hangar.
+    this.post = new PostFX({ renderer: this.renderer, settings: this.settings });
+    this.post.setEnabled(!!preset.postFX);
+    this.post.setSize(window.innerWidth, window.innerHeight);
+
     window.addEventListener('resize', () => this._onResize());
   }
 
@@ -114,6 +121,9 @@ class Game {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     this.renderer.setPixelRatio(dpr * scale);
     this.renderer.setSize(window.innerWidth, window.innerHeight, false);
+    // The post buffers follow the pixel ratio, so dropping the render scale drops
+    // their cost with it.
+    this.post?.setSize(window.innerWidth, window.innerHeight);
   }
 
   _onResize() {
@@ -183,6 +193,7 @@ class Game {
       this._applyRenderScale();
     }
     if (key === 'quality') {
+      this.post?.setEnabled(!!this.settings.preset.postFX);
       this._applyRenderScale();
       this.renderer.shadowMap.enabled = this.settings.preset.shadows;
       this.world?.applyQuality();
@@ -743,7 +754,11 @@ class Game {
     }
 
     this._accumulateStats(dt);
-    this.renderer.render(this.scene, this.camera);
+    if (this.world.grade) this.post.setGrade(this.world.grade);
+    if (!this.post.render(this.scene, this.camera)) {
+      this.renderer.setRenderTarget(null);
+      this.renderer.render(this.scene, this.camera);
+    }
     this.input.endFrame();
   }
 

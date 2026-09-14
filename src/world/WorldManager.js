@@ -4,6 +4,7 @@ import { REGIONS, REGION_ORDER, TILE, regionAt } from '../data/regions.js';
 import { createTerrain, createWater, createUrbanTexture, collisionHeight, terrainHeight, isOnRunway, isWater } from './Terrain.js';
 import { generateCity, PERIOD, ROAD } from './CityGenerator.js';
 import { createLandmarks, animateLandmarks } from './Landmarks.js';
+import { createAtmosphere, applyAerialPerspective } from './Atmosphere.js';
 import { createSkyDome, updateSkyDome } from './SkyDome.js';
 import { TimeOfDay } from './TimeOfDay.js';
 import { WeatherManager } from './WeatherManager.js';
@@ -56,6 +57,21 @@ export class WorldManager {
     this.scene.add(this.city);
 
     this.landmarks = await step('RAISING LANDMARKS', 0.7, () => createLandmarks(this.grid));
+
+    // Sun-lit haze on everything that fills the screen. Applied after the meshes exist
+    // so it picks up the materials they actually ended up with.
+    this.atmosphere = createAtmosphere();
+    const hazed = new Set();
+    for (const root of [this.city, this.terrain, this.landmarks]) {
+      root?.traverse?.((o) => {
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        for (const m of mats) {
+          if (!m || hazed.has(m) || m.fog === false) continue;
+          hazed.add(m);
+          applyAerialPerspective(m, this.atmosphere);
+        }
+      });
+    }
     this.scene.add(this.landmarks);
 
     this.sky = await step('LIGHTING THE SKY', 0.82, () => createSkyDome());
@@ -159,6 +175,41 @@ export class WorldManager {
     const night = tod.night;
     this.traffic.setNight(night);
 
+    // --- aerial perspective: the haze is lit by the sun of the moment
+    if (this.atmosphere) {
+      this.atmosphere.uSunDirView.value
+        .copy(tod.sunDir)
+        .transformDirection(this.camera.matrixWorldInverse);
+      this.atmosphere.uHazeSun.value.copy(tod.state.sunColor).lerp(tod.state.fog, 0.35);
+      this.atmosphere.uHazeSky.value.copy(tod.state.fog);
+      // Strong when the sun is low and the air is thick, gone at night.
+      const lowSun = 1 - Math.abs(tod.sunDir.y);
+      this.atmosphere.uHazeStrength.value =
+        (0.25 + 0.55 * lowSun) * (1 - night) * (0.6 + 0.4 * (1 - wx.current.visibility));
+    }
+
+    // --- grade: what the camera does with the light it was given
+    const dusk = Math.max(0, 1 - Math.abs(tod.sunDir.y) * 3.2) * (1 - night);
+    this.grade = {
+      // Open up after dark so the city reads, close down under a noon sun.
+      exposure: 1.02 + night * 0.22 - Math.max(0, tod.sunDir.y) * 0.1,
+      // The city is its own light source at night, so that is when bloom earns its keep.
+      bloom: 0.28 + night * 0.5 + dusk * 0.18,
+      // Shadows toward the sky, highlights toward the sun.
+      lift: {
+        r: tod.state.ambColor.r * 0.045 * (0.4 + night),
+        g: tod.state.ambColor.g * 0.045 * (0.4 + night),
+        b: tod.state.ambColor.b * 0.05 * (0.5 + night),
+      },
+      gain: {
+        r: 1 + dusk * 0.06,
+        g: 1 + dusk * 0.015,
+        b: 1 - dusk * 0.03 + night * 0.03,
+      },
+      saturation: 1.04 + dusk * 0.12 - night * 0.06,
+      vignette: 0.3 + night * 0.12,
+    };
+
     // --- sky uniforms follow the lighting rig and the cloud deck
     const su = this.sky.userData.uniforms;
     su.uSunDir.value.copy(tod.sunDir);
@@ -190,6 +241,12 @@ export class WorldManager {
       // the contrast instead of competing with a grey wash.
       this.city.userData.facadeUniforms.uFill.value =
         0.34 * (1 - night) * (0.55 + 0.45 * wx.current.visibility) + 0.035 * night;
+      // Glazing reflects the sky and the sun of this minute, from the same keyframes
+      // that light the scene, so a tower at dusk is orange on the west face.
+      this.city.userData.facadeUniforms.uSkyTint.value
+        .copy(tod.state.zenith).lerp(tod.state.horizon, 0.55)
+        .lerp(new THREE.Color(wx.current.hazeTint), 0.3 * (1 - wx.current.visibility));
+      this.city.userData.facadeUniforms.uSunTint.value.copy(tod.state.sunColor);
     }
     if (this.terrain.userData.uniforms) {
       this.terrain.userData.uniforms.uNight.value = night;

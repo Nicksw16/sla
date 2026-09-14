@@ -14,6 +14,7 @@ export const QUALITY_PRESETS = {
     particles: 0.4,
     antialias: false,
     cityLights: false,
+    postFX: false,
   },
   medium: {
     label: 'MEDIUM',
@@ -26,6 +27,7 @@ export const QUALITY_PRESETS = {
     particles: 0.7,
     antialias: false,
     cityLights: true,
+    postFX: true,
   },
   high: {
     label: 'HIGH',
@@ -38,6 +40,7 @@ export const QUALITY_PRESETS = {
     particles: 1,
     antialias: true,
     cityLights: true,
+    postFX: true,
   },
   ultra: {
     label: 'ULTRA',
@@ -50,6 +53,7 @@ export const QUALITY_PRESETS = {
     particles: 1.3,
     antialias: true,
     cityLights: true,
+    postFX: true,
   },
 };
 

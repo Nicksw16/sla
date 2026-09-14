@@ -202,6 +202,29 @@ single collision authority.
 Aircraft, missions, districts, upgrades and weather are data files. Adding a mission means
 adding an entry.
 
+### Rendering
+
+The frame is rendered into a floating-point buffer and finished by hand rather than
+straight to the screen, because tone mapping in the material would clamp the highlights
+before anything could be done with them. The chain is one scene pass, a bright pass and
+two blurs at a quarter of the frame in each axis, and a single final pass that adds the
+bloom, exposes, grades, tone maps, vignettes and writes sRGB. Two full-resolution passes
+in total. It is off on the low preset, where the renderer's own tone mapping takes over
+again.
+
+The grade is driven by the hour rather than fixed: exposure opens after dark and closes
+under a noon sun, bloom is worth most at night when the city is its own light source,
+the shadows lift toward the sky colour and the highlights gain toward the sun's.
+
+Haze is lit rather than flat. Looking into the sun the air glows warm and looking away
+it stays cold, which is most of what tells the eye how far away a building is. It costs
+one dot product in the fog step of every material that fills the screen.
+
+Glass and concrete are different materials and not just different colours: glazing is
+smooth and slightly metallic so it takes a specular highlight and reflects the sky of
+the moment, concrete is rough and takes neither. The same masks that draw a window in
+the facade shader set those values, so the cost is a few instructions, not a texture.
+
 ### Performance
 
 - Buildings, trees and traffic are instanced: ~2,000 buildings cost three draw calls.
