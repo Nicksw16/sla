@@ -61,6 +61,34 @@ const STATE = {
   CHAMPION: 'champion',
 };
 
+/**
+ * Puts a real error on the loading screen instead of leaving it spinning forever.
+ *
+ * The loading screen's placeholder text ("BUILDING SKYLINE CITY…") is static HTML,
+ * already in the page before any script runs — so a boot that dies quietly looks
+ * identical to a boot that is merely slow, on any device or browser combination we
+ * did not personally test against. This turns that silence into something a player
+ * can screenshot and send back.
+ */
+function reportBootFailure(err) {
+  console.error('[SkylineFlight] boot failed', err);
+  const message = String(err?.message ?? err ?? 'unknown error');
+  const text = document.getElementById('loading-text');
+  const fill = document.getElementById('loader-fill');
+  if (text) {
+    // The one failure worth a specific word of advice: some in-app browsers (a
+    // link opened inside a chat or social app's built-in viewer rather than the
+    // phone's real browser) disable WebGL outright, which throws exactly this.
+    const hint = /webgl context/i.test(message)
+      ? ' — try opening this link in your phone’s browser (Safari/Chrome) rather than inside another app'
+      : '';
+    text.textContent = `COULD NOT START THE GAME — ${message}${hint}`;
+    text.style.color = '#ff4d5a';
+    text.style.maxWidth = '80vw';
+  }
+  if (fill) fill.style.background = '#ff4d5a';
+}
+
 class Game {
   constructor() {
     this.bus = new EventBus();
@@ -84,9 +112,20 @@ class Game {
     this._aircraftModel = null;
     this._hangarDrag = null;
 
-    this._initRenderer();
-    this._initScene();
-    this._initUI();
+    try {
+      // Synchronous, and the one place most likely to throw on a device or an
+      // embedding context (a sandboxed iframe, a browser with no WebGL) we never
+      // tested against — creating the WebGLRenderer itself can throw outright.
+      // This happens before _boot()'s own try/catch even exists, so it needs one
+      // of its own; reportBootFailure() only touches the DOM by id, so it works
+      // however far construction got.
+      this._initRenderer();
+      this._initScene();
+      this._initUI();
+    } catch (err) {
+      reportBootFailure(err);
+      return;
+    }
     this._boot();
   }
 
@@ -211,6 +250,20 @@ class Game {
 
   // ---------------------------------------------------------------------- boot
   async _boot() {
+    try {
+      await this._bootSequence();
+    } catch (err) {
+      // _boot() is fired from the constructor with no caller to await it, so a
+      // rejection here would otherwise vanish into an unhandled-rejection with
+      // nothing on screen but the static "BUILDING SKYLINE CITY…" placeholder
+      // forever — indistinguishable, to a player, from the game just being slow.
+      // A device or browser we never tested against is exactly where this bites,
+      // so it fails loud instead of quiet.
+      reportBootFailure(err);
+    }
+  }
+
+  async _bootSequence() {
     this.world = new WorldManager({
       scene: this.scene,
       camera: this.camera,
@@ -852,4 +905,38 @@ class Game {
 }
 
 // Expose the instance for the headless smoke test to drive.
-window.__skyline = new Game();
+try {
+  window.__skyline = new Game();
+} catch (err) {
+  // Belt and braces alongside the constructor's own try/catch: whatever slips
+  // past that (an error in a field initialiser, say) still lands on screen
+  // rather than a page that looks like it is doing nothing.
+  reportBootFailure(err);
+}
+
+// A boot that dies inside an async chain (world.build, aircraft assembly) rejects
+// _boot()'s promise with no caller awaiting it - that becomes an unhandled
+// rejection instead of a thrown error, so it needs its own net. Only acts while
+// still on the loading screen: once the menu is up, a later rejection is a
+// runtime bug, not a boot failure, and clobbering the HUD over it would be worse.
+window.addEventListener('unhandledrejection', (event) => {
+  if (!window.__skyline || window.__skyline.state === STATE.LOADING) {
+    reportBootFailure(event.reason);
+  }
+});
+
+// Slow hardware and a hard crash look identical on the loading screen for the
+// first several seconds. If we are still there this long after either the fully
+// procedural city (thousands of buildings) or the shaders it is painted with is
+// past anything tested on, this stops being "any moment now" and becomes worth
+// telling the player about — with a way out, rather than a screen that just sits
+// there with no sign whether it is still working.
+setTimeout(() => {
+  if (window.__skyline?.state === STATE.LOADING) {
+    const text = document.getElementById('loading-text');
+    if (text && !text.textContent.startsWith('COULD NOT START')) {
+      text.textContent += ' — still working; if this never finishes, try reloading '
+        + 'with a lower quality preset';
+    }
+  }
+}, 25000);

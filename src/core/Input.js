@@ -143,11 +143,16 @@ export class Input {
 
   requestMouseLock(element) {
     if (!this.settings.get('mouseSteering')) return;
-    element?.requestPointerLock?.();
+    // A sandboxed embed (an artifact iframe without allow-pointer-lock) throws a
+    // SecurityError synchronously here rather than just declining quietly, which
+    // would otherwise take the mission-start call site down with it.
+    try { element?.requestPointerLock?.(); } catch { /* not available here */ }
   }
 
   releaseMouseLock() {
-    if (document.pointerLockElement) document.exitPointerLock?.();
+    if (document.pointerLockElement) {
+      try { document.exitPointerLock?.(); } catch { /* nothing to release */ }
+    }
   }
 
   _pollGamepad() {
