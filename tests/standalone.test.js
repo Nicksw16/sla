@@ -49,7 +49,7 @@ const booted = await page.waitForFunction(
 const boot = booted ? await page.evaluate(() => {
   const g = window.__skyline;
   return { state: g.state, buildings: g.world.cityStats.buildings, save: g.save.available,
-    triangles: g.renderer.info.render.triangles };
+    triangles: g.post?.enabled ? g.post.sceneStats.triangles : g.renderer.info.render.triangles };
 }) : {};
 check('it boots from the disk with no server', booted && boot.state === 'menu', JSON.stringify(boot));
 check('the city and the renderer come up', boot.buildings > 1000 && boot.triangles > 50000, JSON.stringify(boot));

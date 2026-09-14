@@ -166,8 +166,10 @@ async function main() {
       aircraft: g.spec.name,
       checkpointPool: g.checkpoints.pool.length,
       hasRenderer: !!g.renderer,
-      drawCalls: g.renderer.info.render.calls,
-      triangles: g.renderer.info.render.triangles,
+      // Post-processing resets these counters, so the world's own cost is kept by
+      // the pipeline and read from there when it is running.
+      drawCalls: g.post?.enabled ? g.post.sceneStats.calls : g.renderer.info.render.calls,
+      triangles: g.post?.enabled ? g.post.sceneStats.triangles : g.renderer.info.render.triangles,
       audioReady: g.audio.ready || g.audio.failed,
       missionCount: g.ui ? undefined : undefined,
     };
@@ -241,7 +243,8 @@ async function main() {
   await sleep(600);
   const afterQuality = await page.evaluate(() => ({
     quality: window.__skyline.settings.get('quality'),
-    calls: window.__skyline.renderer.info.render.calls,
+    calls: window.__skyline.post?.enabled
+      ? window.__skyline.post.sceneStats.calls : window.__skyline.renderer.info.render.calls,
   }));
   check('quality can be changed at runtime', afterQuality.quality === 'low' && afterQuality.calls > 0, JSON.stringify(afterQuality));
   await page.evaluate(() => document.querySelector('[data-action="set"][data-key="quality"][data-value="high"]').click());
@@ -567,7 +570,7 @@ async function main() {
         fogFar: Math.round(g.scene.fog.far),
         night: Number(g.world.night.toFixed(2)),
         rainVisible: g.world.weather.rain.visible,
-        calls: g.renderer.info.render.calls,
+        calls: g.post?.enabled ? g.post.sceneStats.calls : g.renderer.info.render.calls,
       };
     }, [weather, hour]);
     weatherRuns.push({ weather, ...out });

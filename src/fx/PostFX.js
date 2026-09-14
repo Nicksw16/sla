@@ -126,6 +126,8 @@ export class PostFX {
     this.renderer = renderer;
     this.settings = settings;
     this.enabled = false;
+    /** What the scene pass cost, before the post passes overwrite the counters. */
+    this.sceneStats = { triangles: 0, calls: 0 };
     this.width = 1;
     this.height = 1;
     this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
@@ -225,6 +227,11 @@ export class PostFX {
     renderer.setRenderTarget(this.sceneTarget);
     renderer.clear();
     renderer.render(scene, camera);
+    // renderer.info resets on every render call, so after the blits below it describes
+    // a full-screen quad rather than the city. Keep what the world actually cost.
+    const info = renderer.info.render;
+    this.sceneStats.triangles = info.triangles;
+    this.sceneStats.calls = info.calls;
 
     this.brightMat.uniforms.tDiffuse.value = this.sceneTarget.texture;
     this._blit(this.brightMat, this.brightTarget);
