@@ -47,10 +47,19 @@ export const DESTRUCTION = {
   // is for. An aircraft should open the same hole in a building whatever the
   // simulation happens to be chopping that building into, and a faster one should
   // open a bigger one: the radius grows with the energy delivered, up to a gash
-  // about two thirds of the way across one of these towers.
-  BLAST_BASE: 16,
+  // wider than one of these towers is across.
+  //
+  // The floor carries about two more blocks of reach in every direction than it
+  // first shipped with: the trainer's bite went from two blocks by three over two
+  // storeys to four by six over four, and everything from the mid-tier up now carries
+  // clean through the plan. The ceiling does not, because past about seventy metres the
+  // sphere clears a whole storey of the plan, and the tower above it loses the ground
+  // entirely and shears off. That cliff is sharp: seventy leaves the fastest jet a
+  // fourteen-storey crater with nothing at all following it down, seventy-four drops
+  // twelve hundred more blocks.
+  BLAST_BASE: 44,
   BLAST_PER_STRENGTH: 3.1,
-  BLAST_MAX: 62,
+  BLAST_MAX: 70,
   BLAST_FALLOFF: 1.05,
   // How hard the blast throws what it breaks, in metres per second per unit of
   // impact strength, and the ceiling on that. The first version deliberately kept

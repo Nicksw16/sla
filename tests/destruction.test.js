@@ -101,9 +101,12 @@ function fly(w, {
     assert.ok(!required, 'the collision grid should report the tower at this point');
     return { broke: 0, absorbed: 0, miss: true };
   }
-  return w.field.impact({
+  const result = w.field.impact({
     point: hit.point, normal: hit.normal, direction: dir, ref: hit.ref, speed, mass,
   });
+  // The contact point comes back with the result: it is where the blast is centred,
+  // and the only honest thing to measure the crater's reach against.
+  return { ...result, point: hit.point };
 }
 
 /** Flies a tower's base out from every side until it has nothing left to stand on. */
@@ -349,16 +352,28 @@ test('TESTE 4 - a frontal hit takes out the columns it struck and nothing else',
   // Everything that came away came away in the blast. Nothing else follows it: the
   // hit blows a crater, it does not shear the building above the crater off.
   assert.equal(broken.length, r.broke, 'the blast took exactly what it broke');
-  const reach = DESTRUCTION.BLAST_BASE + DESTRUCTION.ENERGY_CEILING * DESTRUCTION.BLAST_PER_STRENGTH;
   for (const m of broken) {
-    assert.ok(m.centre.x <= t.origin.x + reach, 'all of it on the side that was hit');
-    assert.ok(Math.abs(m.centre.y - y) <= reach + t.moduleSize.y,
-      'and all of it within the blast, above and below alike');
+    assert.ok(m.distanceTo(r.point) <= DESTRUCTION.BLAST_MAX,
+      'every block that came away was inside the blast');
   }
-  // A mid-tier airframe leaves the far quarter of the plan standing.
-  const far = t.modules.filter((m) => m.centre.x > t.origin.x + t.width * 0.25);
+  // The blast being a sphere, that bounds the crater vertically however wide it opens
+  // the plan: the storeys well above it and well below it are untouched, which is most
+  // of the building.
+  const clear = DESTRUCTION.BLAST_MAX + t.moduleSize.y;
+  const away = t.modules.filter((m) => Math.abs(m.centre.y - y) > clear);
+  assert.ok(away.length > t.modules.length * 0.5);
+  assert.ok(away.every((m) => m.intact), 'the building above and below the crater is untouched');
+
+  // Horizontally the bound belongs to the aircraft rather than the blast. A mid-tier
+  // airframe now carries clean through the plan - that is what the reach is for - but
+  // the starter the player leaves the hangar in takes a bite out of the face it hit
+  // and leaves the far half of the building standing.
+  const starter = world();
+  const st = starter.towers[0];
+  fly(starter, { face: 'west', y, ...TRAINER });
+  const far = st.modules.filter((m) => m.centre.x > st.origin.x);
   assert.ok(far.length > 0);
-  assert.ok(far.every((m) => m.intact), 'the far quarter is untouched');
+  assert.ok(far.every((m) => m.intact), 'the starter leaves the far half of the plan standing');
 });
 
 test('what is above the crater stays up', () => {
@@ -382,7 +397,7 @@ test('what is above the crater stays up', () => {
 test('the fastest jet opens the building right through', () => {
   const w = world();
   const t = w.towers[0];
-  // What the mid-tier cannot do. This is the difference the blast radius is for:
+  // What the starter cannot do. This is the difference the blast radius is for:
   // enough energy and the opening is not a bite out of the facade, it is a hole you
   // could fly the same aircraft back through.
   fly(w, { face: 'west', y: BASE + H * 0.5, ...FASTEST });
@@ -402,13 +417,25 @@ test('the fastest jet opens the building right through', () => {
 test('TESTE 5 - a lateral hit damages the face it came in through', () => {
   const w = world();
   const t = w.towers[0];
-  fly(w, { face: 'north', ...MIDTIER });
+  fly(w, { face: 'north', ...TRAINER });
   const broken = t.modules.filter((m) => !m.intact);
   assert.ok(broken.length > 0);
   const deepest = Math.max(...broken.map((m) => m.centre.z)) - t.origin.z;
-  assert.ok(deepest < t.depth * 0.25, `the damage stayed on the struck face (${deepest.toFixed(0)} m in)`);
-  const far = t.modules.filter((m) => m.centre.z > t.origin.z + t.depth * 0.25);
+  assert.ok(deepest < 0, `the starter's hole stops short of the centre line (${deepest.toFixed(0)} m)`);
+  const far = t.modules.filter((m) => m.centre.z > t.origin.z);
   assert.ok(far.every((m) => m.intact), 'the opposite face is untouched');
+
+  // Enough energy and the crater does reach the opposite face - the blast is wider
+  // than the tower now - but it is still a hole in the face that was struck, not a
+  // storey taken out evenly: the weight of what came away sits on the near side of
+  // the centre line, and the deepest columns lose a corner of the sphere apiece.
+  const mid = world();
+  const mt = mid.towers[0];
+  fly(mid, { face: 'north', ...MIDTIER });
+  const lost = mt.modules.filter((m) => !m.intact);
+  const centroid = lost.reduce((a, m) => a + (m.centre.z - mt.origin.z), 0) / lost.length;
+  assert.ok(centroid < -mt.moduleSize.z * 0.5,
+    `the crater is centred on the face it came in through (${centroid.toFixed(1)} m)`);
 });
 
 test('TESTE 6 - the lower storeys are built to take more', () => {
