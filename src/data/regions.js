@@ -153,7 +153,7 @@ export const LANDMARKS = [
   { id: 'dam', name: 'VALLEY DAM', x: -240, z: -4020, height: 96, region: 'countryside', type: 'dam' },
   { id: 'tower', name: 'CONTROL TOWER', x: 2560, z: 2740, height: 74, region: 'airport', type: 'atc' },
   { id: 'marina', name: 'SOUTH MARINA', x: -1620, z: 4080, height: 22, region: 'beach', type: 'marina' },
-  { id: 'twins', name: 'GEMINI TOWERS', x: 760, z: 520, height: 452, region: 'central', type: 'twins' },
+  { id: 'twins', name: 'GEMINI TOWERS', x: 230, z: -500, height: 452, region: 'central', type: 'twins' },
   { id: 'park', name: 'CENTRAL PARK', x: -620, z: 640, height: 0, region: 'central', type: 'park' },
   { id: 'ridge', name: 'RIDGE PASS', x: -3100, z: -3400, height: 780, region: 'mountains', type: 'peak' },
 ];

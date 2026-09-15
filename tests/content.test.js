@@ -311,6 +311,59 @@ test('landmarks sit on or above their ground', () => {
   }
 });
 
+test('no mission leg flies through a tall landmark', () => {
+  // The checkpoint test above only asks whether the gates themselves are clear. It
+  // says nothing about the straight line between two gates, which is where an
+  // aircraft actually spends the run - and when the Gemini Towers first went up they
+  // stood squarely across the opening leg of Rooftop Slalom, ten metres off its
+  // centreline. Every checkpoint was still in open air, so nothing failed here; what
+  // failed was the end-to-end suite, where the scripted pilot flew into a tower on
+  // its way to gate two and the mission ended as a crash, taking the scoring, payout
+  // and save assertions down with it. Eleven lines of geometry beats reading that
+  // cascade backwards.
+  // These are the landmarks' own registered collider half-extents, not a guess and
+  // not a comfort margin. The question being asked is the objective one - does the
+  // straight line between two gates pass through solid structure - because how close
+  // is too close for comfort is a design decision, and several routes deliberately
+  // graze a landmark. Financial Canyon, for one, threads past the Obelisk with about
+  // five metres to spare, and that is authored, not accidental.
+  const FOOTPRINT = {
+    twins: 94,           // two shafts of +/-34m, standing +/-60m either side of centre
+    skylineTower: 20,
+    obelisk: 22,
+    tower: 30,
+  };
+  const planDistance = (p, q, c) => {
+    const vx = q.x - p.x;
+    const vz = q.z - p.z;
+    const wx = c.x - p.x;
+    const wz = c.z - p.z;
+    const len2 = vx * vx + vz * vz;
+    const t = len2 ? Math.max(0, Math.min(1, (wx * vx + wz * vz) / len2)) : 0;
+    return Math.hypot(p.x + vx * t - c.x, p.z + vz * t - c.z);
+  };
+
+  for (const m of MISSIONS) {
+    if (!m.route || m.route.length < 2) continue;
+    for (let i = 0; i < m.route.length - 1; i++) {
+      const p = m.route[i];
+      const q = m.route[i + 1];
+      for (const L of LANDMARKS) {
+        const radius = FOOTPRINT[L.id];
+        if (!radius) continue;
+        const d = planDistance(p, q, L);
+        // Only a concern where the leg is low enough to meet the structure.
+        const legTop = Math.max(p.y, q.y);
+        const ground = collisionHeight(L.x, L.z);
+        if (legTop > ground + L.height + 40) continue;
+        assert.ok(d > radius,
+          `${m.id} leg ${i}->${i + 1} passes ${d.toFixed(0)}m from ${L.id} `
+          + `(needs ${radius}m), at ${legTop.toFixed(0)}m against a ${L.height}m structure`);
+      }
+    }
+  }
+});
+
 test('the runway is long enough for the heaviest aircraft to get airborne', () => {
   // Rough ground roll: v^2 / (2a) using the on-ground thrust the model applies.
   for (const id of AIRCRAFT_ORDER) {

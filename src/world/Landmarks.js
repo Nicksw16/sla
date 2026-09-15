@@ -406,94 +406,84 @@ function buildAirport(g, grid, mats) {
   g.add(group);
   return { runwayLights: lights };
 }
-
-/**
- * The plan of a twin tower, as an eight-pointed star.
- *
- * Two squares rotated forty-five degrees against each other; the union of the pair is
- * the star, and circular lobes fill the eight notches between the points. That is the
- * Petronas floorplate, and the reason to copy it is not decoration - a square prism
- * four hundred metres tall reads as a chimney, while a plan with sixteen corners
- * catches the light differently on every face and stays legible as a building from
- * any angle the player can approach it from.
- */
-function starRadius(a, lobe, th) {
-  const half = Math.SQRT1_2;   // the boundary radius of a square never exceeds a/half
-  const rA = a / Math.max(Math.abs(Math.cos(th)), Math.abs(Math.sin(th)), half);
-  const t2 = th - Math.PI / 4;
-  const rB = a / Math.max(Math.abs(Math.cos(t2)), Math.abs(Math.sin(t2)), half);
-  // The lobes sit exactly in the notches, which fall every forty-five degrees.
-  return Math.max(rA, rB) + lobe * a * (1 - Math.cos(8 * th)) * 0.5;
-}
-
-function starShape(a, lobe = 0.17, segments = 80) {
-  const shape = new THREE.Shape();
-  for (let i = 0; i <= segments; i++) {
-    const th = (i / segments) * Math.PI * 2;
-    const r = starRadius(a, lobe, th);
-    const x = Math.cos(th) * r;
-    const y = Math.sin(th) * r;
-    if (i === 0) shape.moveTo(x, y); else shape.lineTo(x, y);
-  }
-  return shape;
-}
-
 /**
  * Curtain wall for the towers.
  *
  * The city's own facades are drawn by a shader on an instanced mesh, which needs
- * per-instance attributes these do not have, so they get their own small version of
- * the same idea: floor slabs every four metres and mullions round the plan. Without
- * them a four-hundred-metre prism of glass has nothing to set its scale against and
- * could be any size at all.
+ * per-instance attributes these do not have, so they get their own version of the
+ * same idea. The emphasis is deliberately vertical: closely spaced columns running
+ * the full height, with the floor lines much fainter between them. On a tower whose
+ * cross-section never changes, that striping is the whole character - it is what
+ * stops a square prism four hundred metres tall from reading as a plain block, and
+ * it does the job the setbacks were doing before without pretending the building
+ * tapers when it does not.
  */
 function towerMaterial() {
   // Low metalness on purpose. The world has no environment map - the only specular
   // input is the sun - so a metalness of 0.6 has almost nothing to reflect and the
-  // towers came out as two black cutouts against the skyline. Glass reads here the
-  // way the rest of the city's does: mostly diffuse, with the sheen coming from
-  // roughness rather than from metal.
+  // towers came out as two black cutouts against the skyline.
   const mat = new THREE.MeshStandardMaterial({
-    color: 0xaec6d8, roughness: 0.26, metalness: 0.16,
+    color: 0xb9c3c9, roughness: 0.34, metalness: 0.22,
   });
   mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uTowerNight = mat.userData.uniforms.uTowerNight;
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', `#include <common>
-        varying vec3 vTowerPos;`)
+        varying vec3 vTowerPos;
+        varying vec3 vTowerNormal;`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>
-        vTowerPos = position;`);
+        vTowerPos = position;
+        vTowerNormal = normal;`);
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>
+        uniform float uTowerNight;
         varying vec3 vTowerPos;
-        // A soft line every `+"`pitch`"+` metres, a pixel wide however far away it is, and
-        // faded out entirely once the spacing goes sub-pixel so it cannot crawl.
-        float towerBand(float v, float pitch) {
+        varying vec3 vTowerNormal;
+        // A soft line at a fixed spacing in metres, about a pixel wide however far
+        // away it is, and faded out entirely once the spacing goes sub-pixel so it
+        // cannot crawl.
+        float towerBand(float v, float pitch, float weight) {
           float n = v / pitch;
           float d = abs(n - floor(n + 0.5)) * pitch;
           float px = fwidth(v);
-          float w = max(pitch * 0.06, px * 0.8);
+          float w = max(pitch * weight, px * 0.8);
           return (1.0 - smoothstep(w * 0.45, w * 1.1, d))
-               * (1.0 - smoothstep(pitch * 0.22, pitch * 0.6, px));
+               * (1.0 - smoothstep(pitch * 0.22, pitch * 0.62, px));
         }`)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
-        float slab = towerBand(vTowerPos.y, 4.0);
-        // Mullions on a world-aligned grid rather than by angle: an angular spacing
-        // needs atan, and atan's derivative explodes across its seam, which prints a
-        // bright stripe straight up one face of the building.
-        float mull = max(towerBand(vTowerPos.x, 3.2), towerBand(vTowerPos.z, 3.2));
-        diffuseColor.rgb *= 1.0 - slab * 0.42;
-        diffuseColor.rgb *= 1.0 - mull * 0.18;
-        // Sky and street bounce, cut right back after dark so the lit floors carry the
-        // contrast instead of competing with a grey wash. The instanced city gets the
-        // same treatment through its uFill uniform.
+        vec3 tn = abs(normalize(vTowerNormal));
+        // Columns every metre and a bit, on whichever face this is. The narrow
+        // spacing is the point: it is what gives the facade its grain.
+        float columns = mix(towerBand(vTowerPos.x, 1.15, 0.30),
+                            towerBand(vTowerPos.z, 1.15, 0.30), step(tn.x, tn.z));
+        columns *= 1.0 - tn.y;            // never on the roof
+        float floors = towerBand(vTowerPos.y, 3.7, 0.10) * (1.0 - tn.y);
+
+        diffuseColor.rgb *= 1.0 - columns * 0.30;
+        diffuseColor.rgb *= 1.0 - floors * 0.16;
+        roughnessFactor = clamp(roughnessFactor + columns * 0.3, 0.05, 1.0);
+        // Sky and street bounce, cut right back after dark so the lit floors carry
+        // the contrast instead of competing with a grey wash. The instanced city
+        // gets the same treatment through its uFill uniform.
         totalEmissiveRadiance += diffuseColor.rgb * (0.30 * (1.0 - uTowerNight) + 0.04 * uTowerNight);
-        roughnessFactor = clamp(roughnessFactor + slab * 0.5, 0.05, 1.0);
-        // Lit offices after dark, in the warm band a real one burns at.
-        totalEmissiveRadiance += vec3(1.0, 0.82, 0.55) * uTowerNight * 0.5
-          * (1.0 - slab) * (0.35 + 0.65 * step(0.55, fract(vTowerPos.y * 0.25 + floor(vTowerPos.x * 0.31) * 0.37)));`);
-    shader.uniforms.uTowerNight = mat.userData.uniforms.uTowerNight;
-    shader.fragmentShader = shader.fragmentShader
-      .replace('varying vec3 vTowerPos;', 'varying vec3 vTowerPos;\n        uniform float uTowerNight;');
+        // Lit offices after dark, by floor and by bay rather than at random, so the
+        // windows come on in blocks the way a real tower's do.
+        float bay = floor(mix(vTowerPos.x, vTowerPos.z, step(tn.x, tn.z)) / 4.6);
+        float storey = floor(vTowerPos.y / 3.7);
+        float lit = step(0.42, fract(sin(bay * 12.9898 + storey * 78.233) * 43758.5453));
+        // Once a storey is thinner than a pixel the pattern is being sampled at
+        // random from one frame to the next, and it aliases into hard horizontal
+        // bands. Fade it to the average occupancy instead, so a distant tower is an
+        // even glow rather than a barcode - the same treatment the city's own
+        // facades get.
+        float litPx = fwidth(vTowerPos.y);
+        // The far value is the occupancy weighted by how much of the wall is
+        // actually glass, not the occupancy on its own. Emitting the per-window
+        // brightness across the whole facade is what lights a distant tower like a
+        // slab of daylight - the same mistake the city's facades made once.
+        lit = mix(0.19, lit, 1.0 - smoothstep(3.7 * 0.3, 3.7 * 0.9, litPx));
+        totalEmissiveRadiance += vec3(1.0, 0.84, 0.58) * uTowerNight * 0.85
+          * lit * (1.0 - floors) * (1.0 - tn.y);`);
   };
   mat.userData.uniforms = { uTowerNight: { value: 0 } };
   // Without this the towers silently inherit another landmark's compiled program and
@@ -506,7 +496,13 @@ function towerMaterial() {
 }
 
 /**
- * Gemini Towers: a matched pair, joined by a skybridge.
+ * Gemini Towers: a matched pair of square prisms, joined by a skybridge.
+ *
+ * Square, and the same square the whole way up. The first version of these tapered
+ * through five setbacks, which is the Petronas profile and not the one anybody
+ * pictures when they say "twin towers" - those were flat-topped boxes of constant
+ * cross-section, and the constancy is exactly what made them read as twins rather
+ * than as two similar buildings.
  *
  * The slot between them is deliberately open air all the way down to the plaza, with
  * the bridge as the only thing spanning it - the same trick as the gap under the
@@ -516,72 +512,47 @@ function towerMaterial() {
 function buildTwinTowers(g, grid, L, mats) {
   const base = terrainHeight(L.x, L.z);
   const h = L.height;
-  const a = h * 0.062;              // half-width of the plan at the ground
-  const gap = a * 2.6;              // clear air between the two shafts
-  const offset = a * 1.42 + gap * 0.5;
+  // Fineness of about six and a half to one, which is roughly what a flat-topped
+  // tower of this height actually is.
+  const a = h * 0.076;              // half-width of the square plan
+  const gap = a * 1.5;              // clear air between the two shafts
+  const offset = a + gap * 0.5;
   const glass = towerMaterial();
   g.userData.towerMaterial = glass;
-
-  // Setbacks. Each stage is a little smaller than the one below, which is what keeps
-  // a tower this tall from reading as a single extruded stick.
-  const stages = [
-    { from: 0.000, to: 0.300, scale: 1.00 },
-    { from: 0.300, to: 0.520, scale: 0.92 },
-    { from: 0.520, to: 0.700, scale: 0.83 },
-    { from: 0.700, to: 0.840, scale: 0.72 },
-    { from: 0.840, to: 0.930, scale: 0.58 },
-  ];
 
   const beacons = [];
   for (const side of [-1, 1]) {
     const tx = L.x + side * offset;
-    for (const st of stages) {
-      const shape = starShape(a * st.scale);
-      const geo = new THREE.ExtrudeGeometry(shape, {
-        depth: h * (st.to - st.from), bevelEnabled: false, curveSegments: 1,
-      });
-      // Extrusion runs along +Z; stand it up, then lift it to its place in the stack
-      // so the floor lines run continuously from the plaza to the roof.
-      geo.rotateX(-Math.PI / 2);
-      geo.translate(0, h * st.from, 0);
-      const m = new THREE.Mesh(geo, glass);
-      m.position.set(tx, base, L.z);
-      m.castShadow = true;
-      m.receiveShadow = true;
-      g.add(m);
 
-      // A steel collar on each setback, catching the light where the plan steps in.
-      const collar = new THREE.Mesh(
-        new THREE.ExtrudeGeometry(starShape(a * st.scale * 1.035), {
-          depth: h * 0.008, bevelEnabled: false, curveSegments: 1,
-        }),
-        mats.steel,
-      );
-      collar.rotation.x = -Math.PI / 2;
-      collar.position.set(tx, base + h * st.from, L.z);
-      collar.castShadow = true;
-      g.add(collar);
-    }
+    // One prism, full height, no setbacks and no taper.
+    const shaft = new THREE.Mesh(new THREE.BoxGeometry(a * 2, h, a * 2), glass);
+    shaft.position.set(tx, base + h * 0.5, L.z);
+    shaft.castShadow = true;
+    shaft.receiveShadow = true;
+    g.add(shaft);
 
-    // Pinnacle: a tapering mast and a spire, which is most of the last fifty metres
-    // of any tower that claims a height.
-    g.add(mesh(new THREE.CylinderGeometry(a * 0.10, a * 0.30, h * 0.052, 12),
-      mats.steel, tx, base + h * 0.956, L.z));
-    g.add(mesh(new THREE.ConeGeometry(a * 0.10, h * 0.062, 12),
-      mats.steel, tx, base + h * 1.013, L.z));
+    // A flat roof with a parapet lip, and the plant deck inside it. A tower this
+    // shape ends in a hard horizontal edge, and that edge is most of its silhouette.
+    g.add(mesh(new THREE.BoxGeometry(a * 2.08, h * 0.012, a * 2.08),
+      mats.steel, tx, base + h + h * 0.004, L.z));
+    g.add(mesh(new THREE.BoxGeometry(a * 1.1, h * 0.022, a * 1.1),
+      mats.dark, tx, base + h + h * 0.015, L.z));
 
-    const beacon = mesh(new THREE.SphereGeometry(h * 0.009, 8, 6), M.beacon(0xff3b30),
-      tx, base + h * 1.05, L.z);
+    // A skirt at the base, where a tower of this kind meets its plaza.
+    g.add(mesh(new THREE.BoxGeometry(a * 2.5, h * 0.028, a * 2.5),
+      mats.concrete, tx, base + h * 0.014, L.z));
+
+    const beacon = mesh(new THREE.SphereGeometry(h * 0.008, 8, 6), M.beacon(0xff3b30),
+      tx, base + h + h * 0.034, L.z);
     beacon.castShadow = false;
     g.add(beacon);
     beacons.push(beacon);
 
     // Each shaft gets its own collider, so the slot between them stays open.
-    const w = a * 1.42;
-    grid.add(tx - w, tx + w, L.z - w, L.z + w, base, base + h * 1.02, 'landmark');
+    grid.add(tx - a, tx + a, L.z - a, L.z + a, base, base + h * 1.02, 'landmark');
   }
 
-  // --- skybridge, two decks at the height a real one sits, a little over a third up
+  // --- skybridge, two decks a little over a third of the way up
   const bridgeY = base + h * 0.375;
   const span = offset * 2;
   for (const deck of [0, h * 0.019]) {
@@ -591,9 +562,7 @@ function buildTwinTowers(g, grid, L, mats) {
   g.add(mesh(new THREE.BoxGeometry(span * 0.94, h * 0.026, a * 0.5),
     mats.glass, L.x, bridgeY + h * 0.0095, L.z));
 
-  // The two legs that carry it, meeting under the middle of the span in a V. The
-  // bridge is not rigidly fixed to either tower on the real thing - it is allowed to
-  // slide as they sway - and the V is what holds it up instead.
+  // The two legs that carry it, meeting under the middle of the span in a V.
   for (const side of [-1, 1]) {
     const legLen = h * 0.19;
     const leg = mesh(new THREE.CylinderGeometry(a * 0.05, a * 0.06, legLen, 8),
@@ -607,6 +576,7 @@ function buildTwinTowers(g, grid, L, mats) {
 
   return beacons;
 }
+
 
 export function createLandmarks(grid) {
   const group = new THREE.Group();
