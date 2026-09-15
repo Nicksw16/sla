@@ -37,6 +37,17 @@ export const MODULE_STATE = {
   DESTROYED: 'destroyed', // removed from the world
 };
 
+/**
+ * How far below a body's underside a surface may sit and still count as the floor it
+ * lands on, in metres. It exists because a block resting on the lattice starts exactly
+ * flush with the slab beneath it, and floating-point exactness is not something to
+ * stake a collapse on.
+ */
+const CONTACT_SKIN = 0.35;
+
+/** What is left of a block's horizontal run after a frame spent inside the structure. */
+const WALL_FRICTION = 0.25;
+
 /** Tuning shared by every destructible. Distances are metres, speeds metres/second. */
 export const DESTRUCTION = {
   // How far an impact's damage reaches, in metres, measured from each block's
@@ -71,8 +82,12 @@ export const DESTRUCTION = {
   // an arc; the spin is what stops them looking like cards.
   BLAST_PUSH: 30,
   BLAST_PUSH_MAX: 115,
-  BLAST_LIFT: 0.38,
+  BLAST_LIFT: 0.22,
   BLAST_SPIN: 4.4,
+  // The most of the throw that may be spent going up, as a fraction of it. What is
+  // left over goes outwards, so the spray leaves the wound rather than standing up
+  // into a fountain over it - which is what used to put the wreckage on the roof.
+  BLAST_VERT_MAX: 0.4,
   // Kinetic energy that counts as a full-strength hit, in the game's own units:
   // aircraft mass is a 0.55-1.4 factor and speed is metres per second.
   //
@@ -702,7 +717,7 @@ export class DestructibleBuilding {
     if (absorbed <= 0) return { broke: 0, absorbed: 0 };
     this.damaged = true;
     for (const m of broken) this._detach(m, impact);
-    this.settleStructure(impact);
+    this.settleStructure();
     this.shell.flush();
     return { broke: broken.length, absorbed };
   }
@@ -720,7 +735,7 @@ export class DestructibleBuilding {
    * hole never triggers it, because the rest of the plan still reaches the ground
    * around the hole; cutting a storey through, or taking the base out, does.
    */
-  settleStructure(impact = null) {
+  settleStructure() {
     // The bound is the height of the building, not a round number. Failure climbs at
     // most one storey per pass, so a fixed twelve stopped being a fixed point the
     // moment the lattice grew past twelve levels: a cut low down left the top two
@@ -733,7 +748,15 @@ export class DestructibleBuilding {
         if (m.intact && !reachable.has(m)) doomed.push(m);
       }
       if (doomed.length === 0) break;
-      for (const m of doomed) this._detach(m, impact);
+      // Detached with no impact, always. These blocks were not touched by the blast -
+      // they are coming down because what was holding them up is gone - and _detach
+      // says as much, but the impact used to be handed straight through to them, so
+      // every block in a tower the blast brought down got thrown as if the blast had
+      // reached it. It never showed while the throw was mostly upwards: the building
+      // went up and came back down roughly where it stood. Flattened into the
+      // horizontal it showed immediately, as a collapsing tower sliding two hundred
+      // and fifty metres sideways and leaving its own footprint swept clean.
+      for (const m of doomed) this._detach(m, null);
     }
     for (const p of this.props) {
       if (!p.check()) continue;
@@ -793,6 +816,37 @@ export class DestructibleBuilding {
       // moving at speed and still lets the far side of the building merely drop.
       thrown = clamp(impact.strength * DESTRUCTION.BLAST_PUSH, 0, DESTRUCTION.BLAST_PUSH_MAX)
         * clamp(70 / dist, 0.15, 1);
+      // Flattened, not weakened.
+      //
+      // Radially, a block sitting above the wound is thrown straight up at the full
+      // push, and with the lift on top of that the biggest hits fired everything over
+      // the wound hundreds of metres into the air on a fountain that came back down on
+      // the roof. A blast inside a building cannot push through the floors above and
+      // below it anything like as easily as it vents out of the face it has just
+      // opened, so no more than a set share of the throw is allowed to be vertical.
+      //
+      // Scaling the vertical component would not have been enough on its own: for a
+      // block directly over the wound the radial direction is (0, 1, 0), and scaling
+      // that leaves it pointing straight up however hard it is scaled. What it needs
+      // is somewhere to go, so the balance is put back into the horizontal - outwards
+      // if there is any outward to speak of, and along the aircraft's own track for
+      // the handful of blocks sitting exactly over the impact.
+      const capY = DESTRUCTION.BLAST_VERT_MAX;
+      if (Math.abs(away.y) > capY) {
+        const sideways = Math.sqrt(1 - capY * capY);
+        const hl = Math.hypot(away.x, away.z);
+        if (hl > 1e-4) {
+          away.x = (away.x / hl) * sideways;
+          away.z = (away.z / hl) * sideways;
+        } else {
+          const d = impact.direction;
+          const dl = d ? Math.hypot(d.x, d.z) : 0;
+          const a = Math.random() * Math.PI * 2;
+          away.x = dl > 1e-4 ? (d.x / dl) * sideways : Math.cos(a) * sideways;
+          away.z = dl > 1e-4 ? (d.z / dl) * sideways : Math.sin(a) * sideways;
+        }
+        away.y = Math.sign(away.y) * capY;
+      }
       m.velocity.copy(away).multiplyScalar(thrown * 0.75);
       m.velocity.addScaledVector(impact.direction ?? away, thrown * 0.3);
       m.velocity.y += thrown * DESTRUCTION.BLAST_LIFT;
@@ -896,8 +950,23 @@ export class DestructibleBuilding {
       // standing under this point, and the wreckage already down in this column.
       const cell = this.cellAt(m.centre.x, m.centre.z);
       const standing = this.moduleUnder(m.centre.x, m.centre.z, m.centre.y);
-      const onStructure = standing ? standing.centre.y + standing.size.y * 0.5 : -Infinity;
-      const onRubble = cell < 0 ? -Infinity : this.pile[cell];
+
+      /**
+       * A surface is only a floor if the body was already above it.
+       *
+       * Without that test a block thrown sideways out of the wound finds the storey it
+       * is level with "underneath" it the moment it crosses into the part of the tower
+       * still standing, gets stood on top of that storey, and does the same again on
+       * the next frame - climbing the building one storey per frame until it pops out
+       * on the roof, half a second later, having passed straight through forty floors.
+       * It was two thirds of everything a hit broke off: sixty-four of the ninety-six
+       * blocks the trainer knocked loose ended up on the roof, and the rubble piled to
+       * six hundred metres over a four-hundred-and-sixty-metre building.
+       */
+      const floorAt = (top) => (top <= wasAbove + CONTACT_SKIN ? top : -Infinity);
+      const structureTop = standing ? standing.centre.y + standing.size.y * 0.5 : -Infinity;
+      const onStructure = floorAt(structureTop);
+      const onRubble = cell < 0 ? -Infinity : floorAt(this.pile[cell]);
       // Over its own footprint there is nothing the world can offer that this
       // building does not already know about - its own structure, its own rubble and
       // the plaza - so the world query is skipped entirely. It is only worth asking
@@ -906,6 +975,16 @@ export class DestructibleBuilding {
         ? Math.max(this.groundLevel, onStructure, onRubble)
         : Math.max(groundAt(m.centre.x, m.centre.z, wasAbove), onStructure, onRubble);
       const floor = surface + m.size.y * 0.5;
+
+      // Inside what is still standing rather than on top of it: the block has run into
+      // the wall of the shaft, not landed on a floor. It cannot climb the storey it is
+      // level with, and it should not sail through it either, so the run is killed and
+      // gravity takes it down the face of the building.
+      if (standing && onStructure === -Infinity && structureTop > -Infinity) {
+        m.velocity.x *= WALL_FRICTION;
+        m.velocity.z *= WALL_FRICTION;
+      }
+
       if (m.centre.y <= floor) {
         m.centre.y = floor;
         if (m.velocity.y < -DESTRUCTION.SLEEP_SPEED) {
@@ -919,7 +998,7 @@ export class DestructibleBuilding {
           // own because every storey it takes lengthens the fall onto the next one,
           // and damage accumulates, so a storey that shrugs off the first block to
           // reach it does not shrug off the fifteenth. Nothing here is scheduled.
-          if (standing && standing.intact) {
+          if (standing && standing.intact && onStructure > -Infinity) {
             const blow = clamp(
               (m.mass / this.moduleMass) * hitSpeed / DESTRUCTION.PANCAKE_SPEED,
               0, DESTRUCTION.PANCAKE_MAX,
@@ -981,7 +1060,7 @@ export class DestructibleBuilding {
     // which is the next storey of the collapse, arrived at rather than scripted.
     if (crushed.length) {
       for (const c of crushed) this._detach(c, null);
-      this.settleStructure(null);
+      this.settleStructure();
     }
     this.shell.flush();
   }

@@ -641,7 +641,7 @@ function addRoofClutter(ctx, { x, z, w, d, top, rot, color, detail, tall }) {
 
 /** One building: stacked masses, optional spire, registered for collision. */
 function addBuilding(ctx, opts) {
-  const { box, cyl, cone, roof, grid } = ctx;
+  const { box, cyl, roof, grid } = ctx;
   const { x, z, w, d, height, rot, palette, glass, rng, type, detail = 1 } = opts;
   const base = terrainHeight(x, z) - 2;
   const color = new THREE.Color(palette[rng.int(0, palette.length - 1)]);
@@ -694,11 +694,22 @@ function addBuilding(ctx, opts) {
       cd *= rng.range(0.62, 0.84);
     }
     top = y;
-    // Crown: spire, mast or rooftop plant.
+    // Crown: a stepped block, a rooftop box, or nothing.
+    //
+    // These used to be cones. Seen from an aircraft a cone on a roof does not read as
+    // a spire, it reads as a traffic cone left on the building, and with a crown on
+    // this share of the towers the skyline was a field of them catching the sun. The
+    // allowance goes into a plain crown block instead: the silhouette still steps up
+    // the way a spire made it, and nothing on the roof comes to a point.
+    //
+    // Both draws are kept exactly as they were. The layout of the whole city hangs off
+    // this generator's random stream, so changing what is built here must not change
+    // how many numbers are taken to build it.
     if (rng.next() < opts.spireChance) {
-      const spireH = height * rng.range(0.12, 0.34);
-      cone.add(x, top + spireH / 2, z, Math.min(cw, cd) * 0.42, spireH, Math.min(cw, cd) * 0.42, rot, new THREE.Color(0x99a4b0));
-      top += spireH;
+      const crownH = Math.min(height * rng.range(0.12, 0.34), height * 0.18);
+      box.add(x, top + crownH / 2, z, cw * 0.66, crownH, cd * 0.66, rot,
+        color.clone().multiplyScalar(0.86), 0, style, 0);
+      top += crownH;
     } else if (rng.bool(0.55)) {
       const boxH = rng.range(3, 9);
       box.add(x + rng.range(-cw * 0.2, cw * 0.2), top + boxH / 2, z, cw * 0.45, boxH, cd * 0.45, rot, color.clone().multiplyScalar(0.8), 0, style, 0);
@@ -746,7 +757,6 @@ export function generateCity({ seed = 20260912, detail = 1 } = {}) {
   const ctx = {
     box: new InstanceBatch(new THREE.BoxGeometry(1, 1, 1), facade, { facade: true }),
     cyl: new InstanceBatch(new THREE.CylinderGeometry(1, 1, 1, 12), facade, { facade: true }),
-    cone: new InstanceBatch(new THREE.ConeGeometry(1, 1, 8), roofMat),
     // Four-sided, so a house gets a pitched roof rather than an octagonal hat.
     roof: new InstanceBatch(new THREE.ConeGeometry(1, 1, 4), roofMat),
     grid,
@@ -831,15 +841,14 @@ export function generateCity({ seed = 20260912, detail = 1 } = {}) {
 
   const boxes = ctx.box.build('city:boxes');
   const cyls = ctx.cyl.build('city:cylinders');
-  const cones = ctx.cone.build('city:cones');
   const roofs = ctx.roof.build('city:roofs');
-  for (const m of [boxes, cyls, cones, roofs]) if (m) group.add(m);
+  for (const m of [boxes, cyls, roofs]) if (m) group.add(m);
 
   group.userData.facadeUniforms = facade.userData.uniforms;
   group.userData.urban = urban;
   group.userData.stats = { buildings: placed, colliders: grid.count, perRegion };
   group.userData.dispose = () => {
-    for (const m of [boxes, cyls, cones, roofs]) m?.geometry.dispose();
+    for (const m of [boxes, cyls, roofs]) m?.geometry.dispose();
     facade.dispose();
     roofMat.dispose();
   };

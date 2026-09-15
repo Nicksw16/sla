@@ -514,7 +514,7 @@ test('TESTE 9 - a whole storey lost takes everything above it and nothing below'
   // Nothing above it can trace a path to the ground any more, and only the flood
   // fill can notice that - the local support rule alone would leave it floating.
   for (const m of t.levelModules(level)) t._detach(m, null);
-  t.settleStructure(null);
+  t.settleStructure();
   const lostAbove = t.modules.filter((m) => m.level > level && !m.intact).length;
   const keptBelow = t.modules.filter((m) => m.level < level && m.intact).length;
   assert.equal(lostAbove, above, `everything above the cut came away (${lostAbove}/${above})`);
@@ -526,7 +526,7 @@ test('TESTE 9 - a single missing module leaves a hole, not a shear', () => {
   const w = world();
   const t = w.towers[0];
   t._detach(t.at(5, 0, 0), null);
-  t.settleStructure(null);
+  t.settleStructure();
   assert.equal(counts(t).gone, 1, 'its neighbours carry it and nothing else moves');
 });
 
@@ -536,7 +536,7 @@ test('TESTE 9 - taking the ground out from under a corner does not shear it off'
   const level = 5;
   t._detach(t.at(level, 0, 0), null);
   t._detach(t.at(level, 0, 1), null);
-  t.settleStructure(null);
+  t.settleStructure();
   // The two blocks above the hole have lost the column they were sitting on and stay
   // exactly where they are, because the rest of the plan still reaches the ground
   // around them. This is the rule that used to bring the corner down with them.
@@ -548,7 +548,7 @@ test('TESTE 9 - taking the ground out from under a corner does not shear it off'
 test('TESTE 9 - an untouched tower never loses a module on its own', () => {
   const w = world();
   const t = w.towers[1];
-  t.settleStructure(null);
+  t.settleStructure();
   assert.equal(counts(t).gone, 0, 'a settle pass on an intact tower changes nothing');
 });
 
@@ -716,22 +716,41 @@ test('a collapse leaves a mound on the footprint and a scatter around it', () =>
 test('wreckage piles on the stump instead of falling through it', () => {
   const w = world();
   const t = w.towers[0];
-  // Take one module out high up and let the column above it come down. Everything
-  // below is untouched, so none of it may end up at street level.
-  // A whole storey taken out, so there really is a mass in the air with nothing but
-  // the stump beneath it.
-  const level = 12;
+  // A storey taken out near the top, so there is a real mass in the air with nothing
+  // but the stump beneath it - and a stump with enough building left in it to take
+  // what lands on it. Cut low down instead and the honest answer is that it does not
+  // take it: twenty-nine storeys arriving on a twelve-storey stump pancake it to the
+  // ground, which is the progressive collapse the test below this one is about.
+  const level = t.levels - 4;
   for (const m of t.levelModules(level)) t._detach(m, null);
-  t.settleStructure(null);
+  t.settleStructure();
   const dropped = t.falling.slice();
   assert.ok(dropped.length >= 4, `${dropped.length} blocks in the air`);
   settle(w);
   const stumpTop = t.origin.y + level * (t.height / t.levels);
+  assert.equal(t.standing, true, 'the stump is still there to have piled on');
+  // Measured against the street rather than against the cut. A slab that fell through
+  // the tower ends up at nothing; one that piled on the stump ends up near the top of
+  // it. The gap between those two answers is the whole building, so the bound does not
+  // have to be tight - and it should not be, because the storey the wreckage lands on
+  // is allowed to give way under it, which is the pancake and is tested below.
   for (const m of dropped) {
-    assert.ok(m.centre.y > stumpTop,
+    assert.ok(m.centre.y - t.origin.y > t.height * 0.5,
       `a slab came to rest at ${(m.centre.y - t.origin.y).toFixed(0)} m, under a stump `
       + `${(stumpTop - t.origin.y).toFixed(0)} m tall`);
   }
+
+  // And the general form of it, which is what the name of this test is really about:
+  // nothing at rest has sunk into the building. A block either sits on top of what is
+  // still standing under it or there is nothing standing under it at all - never
+  // inside it, which is how wreckage falls through a tower.
+  const sunk = t.modules.filter((m) => {
+    if (m.state !== MODULE_STATE.SETTLED) return false;
+    const under = t.moduleUnder(m.centre.x, m.centre.z, m.centre.y);
+    if (!under) return false;
+    return under.centre.y + under.size.y * 0.5 > m.centre.y - m.size.y * 0.5 + 1;
+  });
+  assert.equal(sunk.length, 0, `${sunk.length} blocks came to rest inside the structure`);
 });
 
 test('the collision grid is a floor as well as a wall', () => {
