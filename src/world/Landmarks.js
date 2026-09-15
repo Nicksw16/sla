@@ -548,13 +548,13 @@ function buildTwinTowers(g, grid, L, mats) {
   const glass = towerMaterial();
   g.userData.towerMaterial = glass;
 
-  // Twenty storeys of four-by-four cells: blocks about seventeen metres square and
-  // twenty-three tall, three hundred and twenty to a tower. Fine enough that a hit
-  // takes a bite out of the facade rather than a quarter of the building, and that
-  // what comes down reads as masonry rather than as furniture; coarse enough that a
-  // full collapse is a few hundred bodies rather than a few thousand.
-  const LEVELS = 20;
-  const CELLS = 4;
+  // Twenty-eight storeys of six-by-six cells: blocks about eleven metres square and
+  // sixteen tall, a thousand and eight to a tower. Fine enough that an aircraft tears
+  // an opening through the facade with ragged edges rather than removing tidy
+  // rectangles, and that what comes down reads as masonry; coarse enough that a full
+  // collapse is a thousand bodies rather than tens of thousands.
+  const LEVELS = 28;
+  const CELLS = 6;
 
   const beacons = [];
   const towers = [];
@@ -571,10 +571,13 @@ function buildTwinTowers(g, grid, L, mats) {
       height: h,
       levels: LEVELS,
       cells: CELLS,
-      // A quarter-storey of curtain wall and floor plate, in the same arbitrary
-      // tonnes the flight model measures aircraft in.
-      moduleMass: 900,
-      baseStrength: 1,
+      // Curtain wall and floor plate, in the same arbitrary tonnes the flight model
+      // measures aircraft in - per cubic metre, so the lattice can be re-chopped
+      // without the building changing weight.
+      density: 0.135,
+      // Deliberately below one: these are glass and light floor plates hung on a
+      // frame, not the frame itself, and they are meant to come away.
+      baseStrength: 0.55,
     });
     towers.push(tower);
 

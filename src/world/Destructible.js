@@ -39,10 +39,18 @@ export const MODULE_STATE = {
 
 /** Tuning shared by every destructible. Distances are metres, speeds metres/second. */
 export const DESTRUCTION = {
-  // How far an impact's damage reaches, as a multiple of the largest module edge.
-  // Measured from the module's surface, not its centre, so the slab actually struck
-  // takes the full hit and its neighbours take the falloff.
-  BLAST_RADIUS: 1.3,
+  // How far an impact's damage reaches, in metres, measured from each block's
+  // surface rather than its centre so the one actually struck takes the full hit.
+  //
+  // Metres, not blocks. Tying the reach to the module size meant that making the
+  // blocks smaller made the wound smaller - the exact opposite of what finer rubble
+  // is for. An aircraft should open the same hole in a building whatever the
+  // simulation happens to be chopping that building into, and a faster one should
+  // open a bigger one: the radius grows with the energy delivered, up to a gash
+  // about two thirds of the way across one of these towers.
+  BLAST_BASE: 13,
+  BLAST_PER_STRENGTH: 2.4,
+  BLAST_MAX: 48,
   BLAST_FALLOFF: 1.5,
   // Kinetic energy that counts as a full-strength hit, in the game's own units:
   // aircraft mass is a 0.55-1.4 factor and speed is metres per second.
@@ -78,7 +86,11 @@ export const DESTRUCTION = {
   // underneath and a block that has fallen two hundred metres goes through it. That
   // is the whole of progressive collapse - the front accelerates because each storey
   // it takes lengthens the fall onto the next, and nothing anywhere schedules it.
-  PANCAKE_SPEED: 65,
+  //
+  // It has to stay well clear of a single storey's drop. Weaken the blocks and leave
+  // this where it was and one block falling sixteen metres punches the floor under
+  // it, which turns every hole in the building into a hole all the way to the street.
+  PANCAKE_SPEED: 110,
   PANCAKE_MAX: 3,
   // Masonry does not survive arriving at terminal velocity. Accumulated impact speed
   // past this and the block stops being a block and becomes the rubble it throws off.
@@ -90,7 +102,7 @@ export const DESTRUCTION = {
   // a four-hundred-metre tower piled back up to four hundred metres.
   PILE_COMPACTION: 0.4,
   // Budgets. These ceilings are what keep a collapse off the frame budget.
-  MAX_PHYSICAL_MODULES: 340,
+  MAX_PHYSICAL_MODULES: 1100,
   // How many detachments in one batch are worth an effect. A tower shearing in half
   // is one event to the player, not eighty, and eighty would empty the particle pool
   // on the first frame of it.
@@ -386,7 +398,7 @@ export class RigidProp {
 export class DestructibleBuilding {
   constructor({
     name, parent, grid, material, origin, width, depth, height,
-    levels = 16, cells = 2, moduleMass = 900, baseStrength = 1.0,
+    levels = 16, cells = 2, density = 0.135, baseStrength = 1.0,
   }) {
     this.name = name;
     this.grid = grid;
@@ -411,6 +423,9 @@ export class DestructibleBuilding {
     const cellW = width / cells;
     const cellD = depth / cells;
     this.moduleSize = new THREE.Vector3(cellW, levelHeight, cellD);
+    // Mass follows volume rather than being a number per block, so chopping the same
+    // building into finer pieces does not quietly multiply what it weighs.
+    this.moduleMass = Math.max(1, density * cellW * cellD * levelHeight);
 
     // The shell's frame is the centre of the tower, so instance coordinates read as
     // "metres from the middle of the building" - exactly what the curtain wall
@@ -448,7 +463,7 @@ export class DestructibleBuilding {
             size: this.moduleSize,
             level,
             cell: cz * cells + cx,
-            mass: moduleMass,
+            mass: this.moduleMass,
             strength,
             grounded: level === 0,
           });
@@ -578,8 +593,10 @@ export class DestructibleBuilding {
    * the support pass below makes of the hole this leaves.
    */
   applyImpact(impact) {
-    const reach = Math.max(this.moduleSize.x, this.moduleSize.y, this.moduleSize.z)
-      * DESTRUCTION.BLAST_RADIUS;
+    const reach = clamp(
+      DESTRUCTION.BLAST_BASE + impact.strength * DESTRUCTION.BLAST_PER_STRENGTH,
+      DESTRUCTION.BLAST_BASE, DESTRUCTION.BLAST_MAX,
+    );
     const broken = [];
     let absorbed = 0;
 
@@ -809,7 +826,7 @@ export class DestructibleBuilding {
           // reach it does not shrug off the fifteenth. Nothing here is scheduled.
           if (standing && standing.intact) {
             const blow = clamp(
-              (m.mass / 900) * hitSpeed / DESTRUCTION.PANCAKE_SPEED,
+              (m.mass / this.moduleMass) * hitSpeed / DESTRUCTION.PANCAKE_SPEED,
               0, DESTRUCTION.PANCAKE_MAX,
             );
             if (standing.applyDamage(blow)) crushed.push(standing);
