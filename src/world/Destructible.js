@@ -99,7 +99,7 @@ let nextModuleId = 1;
  * at every slab.
  */
 export class ModuleShell {
-  constructor({ parent, material, size, count, origin, overlap = 1.002 }) {
+  constructor({ parent, material, size, count, origin, extent, overlap = 1.002 }) {
     // A hair of overlap between neighbours. Boxes that merely touch can show a
     // hairline of background between them once the projection rounds differently on
     // each side of the seam; the excess is under a tenth of a metre and hidden
@@ -112,9 +112,15 @@ export class ModuleShell {
     this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.mesh.castShadow = true;
     this.mesh.receiveShadow = true;
-    // Instances travel a long way from where the mesh was built, and the mesh is
-    // taller than most of what the frustum test would save.
-    this.mesh.frustumCulled = false;
+    // Culling stays on, against a sphere set by hand rather than recomputed from the
+    // instance matrices every frame. Turning it off instead cost a quarter of the
+    // frame rate: a four-hundred-metre tower and its shadow were submitted on every
+    // frame of every mission, including the ones flown on the far side of the city.
+    // The sphere is tight around the intact building and widened only while
+    // something is actually in the air - see DestructibleBuilding.update.
+    this.tightRadius = extent;
+    this.mesh.boundingSphere = new THREE.Sphere(new THREE.Vector3(), extent);
+    this.mesh.frustumCulled = true;
     parent.add(this.mesh);
 
     this.origin = origin.clone();
@@ -164,6 +170,15 @@ export class ModuleShell {
     this._m.compose(this._zero, IDENTITY, this._zero);
     this.mesh.setMatrixAt(index, this._m);
     this._dirty = true;
+  }
+
+  /**
+   * Widens or tightens the culling sphere. Called when the building starts and
+   * stops having pieces in the air, so the cost of being generous is paid only for
+   * the few seconds a collapse actually lasts.
+   */
+  setReach(radius) {
+    if (this.mesh.boundingSphere.radius !== radius) this.mesh.boundingSphere.radius = radius;
   }
 
   /** One upload per frame however many modules moved. */
@@ -368,6 +383,7 @@ export class DestructibleBuilding {
     this.falling = [];
     this.props = [];
     this.collapsed = false;
+    this.damaged = false;
     this.onEvent = null;
 
     const levelHeight = height / levels;
@@ -384,7 +400,11 @@ export class DestructibleBuilding {
       size: this.moduleSize,
       count: levels * cells * cells,
       origin: new THREE.Vector3(origin.x, origin.y + height * 0.5, origin.z),
+      extent: Math.hypot(Math.hypot(width, depth) * 0.5, height * 0.5),
     });
+    // How far a slab can get from the middle of the building before it lands: the
+    // whole height, plus a generous allowance for being thrown sideways.
+    this.fallReach = this.shell.tightRadius + height * 0.75;
 
     const centre = new THREE.Vector3();
     for (let level = 0; level < levels; level++) {
@@ -550,6 +570,7 @@ export class DestructibleBuilding {
     }
 
     if (absorbed <= 0) return { broke: 0, absorbed: 0 };
+    this.damaged = true;
     for (const m of broken) this._detach(m, impact);
     this.settleStructure(impact);
     this.shell.flush();
@@ -664,7 +685,12 @@ export class DestructibleBuilding {
    * step rather than costing a frame's work every frame for the next ten seconds.
    */
   update(dt, groundAt, onLanded, simulate = true) {
-    for (const p of this.props) {
+    // Only widen the culling sphere while there is something outside the building.
+    this.shell.setReach(this.falling.length ? this.fallReach : this.shell.tightRadius);
+    // Props are checked every frame because one of them can be held up by another
+    // building - but only once this building has been touched at all, which for the
+    // whole of a normal mission is never.
+    if (this.damaged) for (const p of this.props) {
       // Checked here as well as after an impact, because a prop can be held up by
       // modules in another building - the skybridge is - and that building's own
       // settle pass is the only thing that would otherwise notice.
@@ -807,6 +833,8 @@ export class DestructibleBuilding {
     }
     this.falling.length = 0;
     this.collapsed = false;
+    this.damaged = false;
+    this.shell.setReach(this.shell.tightRadius);
   }
 }
 

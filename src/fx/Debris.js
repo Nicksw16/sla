@@ -42,9 +42,16 @@ export class DebrisField {
     this.mesh = new THREE.InstancedMesh(geo, mat, this.capacity);
     this.mesh.name = 'debris';
     this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    this.mesh.castShadow = true;
+    // No shadows and no culling test: the chunks are under two metres across, their
+    // shadows are invisible at any distance you would see them from, and the pool is
+    // scattered over the whole city while it is busy. What matters instead is that
+    // an empty pool is not drawn at all - it is empty for almost the entire game,
+    // and submitting it every frame was part of a quarter of the frame rate this
+    // system cost before it was measured.
+    this.mesh.castShadow = false;
     this.mesh.receiveShadow = true;
     this.mesh.frustumCulled = false;
+    this.mesh.visible = false;
     scene.add(this.mesh);
     this.geometry = geo;
     this.material = mat;
@@ -103,6 +110,7 @@ export class DebrisField {
     for (let i = 0; i < n; i++) {
       const idx = this._claim();
       if (!this.alive[idx]) this.liveCount++;
+      this.mesh.visible = true;
       const i3 = idx * 3;
       this.position[i3] = origin.x + (Math.random() - 0.5) * ex;
       this.position[i3 + 1] = origin.y + (Math.random() - 0.5) * ey;
@@ -129,6 +137,11 @@ export class DebrisField {
   }
 
   update(dt, focus, groundAt) {
+    // Nothing in the air is the normal case, and it costs nothing.
+    if (this.liveCount === 0) {
+      if (this.mesh.visible) this.mesh.visible = false;
+      return;
+    }
     let live = 0;
     let dirty = false;
     const far = DEBRIS.MAX_DISTANCE * DEBRIS.MAX_DISTANCE;
@@ -199,12 +212,14 @@ export class DebrisField {
       live++;
     }
     this.liveCount = live;
+    this.mesh.visible = live > 0;
     if (dirty) this.mesh.instanceMatrix.needsUpdate = true;
   }
 
   clear() {
     this.alive.fill(0);
     this.liveCount = 0;
+    this.mesh.visible = false;
     this._m.compose(this._zero, this._q.identity(), this._zero);
     for (let i = 0; i < this.capacity; i++) this.mesh.setMatrixAt(i, this._m);
     this.mesh.instanceMatrix.needsUpdate = true;
