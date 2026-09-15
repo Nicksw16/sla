@@ -64,11 +64,26 @@ export class CameraController {
     this._shake = Math.min(1.6, this._shake + amount * scale);
   }
 
-  /** Short orbit used for crashes and mission completion (spec §47, §114). */
+  /**
+   * Short orbit used for crashes and mission completion (spec §47, §114).
+   *
+   * It begins exactly where the camera already is and pulls out from there. Starting
+   * at a random bearing meant that dying cut instantly to some arbitrary side of the
+   * wreck - the player was looking down the aircraft's back one frame and at its
+   * flank from ninety metres away the next, with no idea which way anything was
+   * facing. Continuing from the chase position keeps the crash where the eye already
+   * is: behind the aircraft, looking at what it just flew into.
+   */
   startCinematic(target, { duration = 3, radius = 46, height = 18, spin = 0.7 } = {}) {
+    const t = target.clone();
+    const dx = this.camera.position.x - t.x;
+    const dz = this.camera.position.z - t.z;
     this._cinematic = {
-      target: target.clone(), t: 0, duration, radius, height, spin,
-      angle: Math.random() * Math.PI * 2,
+      target: t, t: 0, duration, radius, height, spin,
+      angle: Math.atan2(dz, dx),
+      // Where it starts, so the pull-back is a move rather than a cut.
+      fromRadius: Math.max(6, Math.hypot(dx, dz)),
+      fromHeight: this.camera.position.y - t.y,
     };
   }
 
@@ -186,10 +201,16 @@ export class CameraController {
     c.t += dt;
     c.angle += c.spin * dt;
     const rise = smoothstep(0, c.duration, c.t);
+    // Pull out to the shot's own distance over the first stretch of it, rather than
+    // snapping there. On the wide shot that holds a collapsing tower this is the
+    // difference between the building receding and the camera teleporting.
+    const out = smoothstep(0, Math.min(1.6, c.duration * 0.35), c.t);
+    const radius = lerp(c.fromRadius, c.radius, out);
+    const height = lerp(c.fromHeight, c.height + rise * 14, out);
     this.camera.position.set(
-      c.target.x + Math.cos(c.angle) * c.radius,
-      c.target.y + c.height + rise * 14,
-      c.target.z + Math.sin(c.angle) * c.radius,
+      c.target.x + Math.cos(c.angle) * radius,
+      c.target.y + height,
+      c.target.z + Math.sin(c.angle) * radius,
     );
     this.camera.up.set(0, 1, 0);
     this.camera.lookAt(c.target);

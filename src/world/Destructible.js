@@ -60,10 +60,10 @@ export const DESTRUCTION = {
   // both what an aircraft's worth of kinetic energy would actually do to them and
   // the thing worth watching. The upward bias is what turns a sideways spray into
   // an arc; the spin is what stops them looking like cards.
-  BLAST_PUSH: 15,
-  BLAST_PUSH_MAX: 52,
-  BLAST_LIFT: 0.3,
-  BLAST_SPIN: 3.2,
+  BLAST_PUSH: 24,
+  BLAST_PUSH_MAX: 84,
+  BLAST_LIFT: 0.38,
+  BLAST_SPIN: 4.4,
   // Kinetic energy that counts as a full-strength hit, in the game's own units:
   // aircraft mass is a 0.55-1.4 factor and speed is metres per second.
   //
@@ -107,13 +107,12 @@ export const DESTRUCTION = {
   // Masonry does not survive arriving at terminal velocity. Accumulated impact speed
   // past this and the block stops being a block and becomes the rubble it throws off.
   //
-  // Retuned when the blast started throwing blocks properly: at the old figure a
-  // collapse pulverised everything and swept the footprint clean, because the blocks
-  // that were not flung clear all fell far enough to shatter, and the tower left no
-  // mound at all. Measured on the shipped towers, this leaves a mound a quarter of
-  // the building's height on most of its columns, three quarters of it pulverised,
-  // and wreckage scattered a couple of hundred metres into the surrounding streets.
-  BREAKUP_SPEED: 80,
+  // It has to be retuned every time the blast gets harder or the blocks get smaller,
+  // because both make the average block fall further before it stops. Too low and a
+  // collapse pulverises everything and sweeps its own footprint clean, leaving no
+  // mound at all. Measured on the shipped towers: roughly two fifths pulverised, a
+  // mound over most of the plan, and wreckage flung five hundred metres out.
+  BREAKUP_SPEED: 115,
   // Slabs land skewed and interlock, so a stack of them is shorter than the sum of
   // their thicknesses. Measured against the shipped towers: at these two numbers a
   // full collapse pulverises about five sixths of the building and leaves a mound
@@ -121,7 +120,7 @@ export const DESTRUCTION = {
   // a four-hundred-metre tower piled back up to four hundred metres.
   PILE_COMPACTION: 0.4,
   // Budgets. These ceilings are what keep a collapse off the frame budget.
-  MAX_PHYSICAL_MODULES: 1750,
+  MAX_PHYSICAL_MODULES: 3500,
   // How many detachments in one batch are worth an effect. A tower shearing in half
   // is one event to the player, not eighty, and eighty would empty the particle pool
   // on the first frame of it.
@@ -275,7 +274,7 @@ export class StructuralModule {
     this.damage = 0;
     this.grounded = grounded;    // sits on the ground: support of last resort
     this.state = MODULE_STATE.INTACT;
-    this.colliderIndex = -1;
+    this.group = null;           // the collision box this block belongs to
     this.supports = [];          // modules that hold this one up
     this.carries = [];           // modules this one holds up
     this.neighbours = [];        // modules this one shares a face with
@@ -426,6 +425,7 @@ export class DestructibleBuilding {
   constructor({
     name, parent, grid, material, origin, width, depth, height,
     levels = 16, cells = 2, density = 0.135, baseStrength = 1.0,
+    groupCells = 3, groupLevels = 3,
   }) {
     this.name = name;
     this.grid = grid;
@@ -444,6 +444,9 @@ export class DestructibleBuilding {
     // slab in a collapse falls to the same height and the tower reads as melting
     // into the ground instead of piling up on it.
     this.pile = new Float32Array(cells * cells).fill(-Infinity);
+    // The plaza the building stands on. Flat by construction, so a block over the
+    // footprint never has to ask the world how high the ground is.
+    this.groundLevel = origin.y;
     // The highest level still standing in each column, so the search for what is
     // under a falling body starts at the structure rather than at the sky.
     this.columnTop = new Int16Array(cells * cells).fill(levels - 1);
@@ -499,13 +502,51 @@ export class DestructibleBuilding {
             strength,
             grounded: level === 0,
           });
-          m.colliderIndex = grid.add(
-            centre.x - cellW * 0.5, centre.x + cellW * 0.5,
-            centre.z - cellD * 0.5, centre.z + cellD * 0.5,
-            centre.y - levelHeight * 0.5, centre.y + levelHeight * 0.5,
-            'landmark', m,
-          );
           this.modules.push(m);
+        }
+      }
+    }
+
+    // --- collision. The lattice is far too fine to hand to the spatial hash: it
+    //     holds a few thousand boxes per tower, they all land in one or two of its
+    //     cells, and every query near the building - every falling body asking what
+    //     is under it, every aircraft asking what is in front of it - then walks the
+    //     lot. Measured at nine-by-nine: a second per frame during a collapse.
+    //
+    //     So collision gets its own, coarse representation. Blocks are grouped into
+    //     boxes a few cells and a few storeys across, one entry each, and a group
+    //     stops colliding when the last block inside it has gone. That is a hundred
+    //     and twenty-six boxes for a tower instead of three and a half thousand, and
+    //     it costs nothing that matters: a hole reads as open air once the blocks
+    //     around it are gone, a few metres later than the visual hole appears.
+    this.groups = [];
+    const gc = Math.max(1, Math.min(cells, groupCells));
+    const gl = Math.max(1, Math.min(levels, groupLevels));
+    for (let l0 = 0; l0 < levels; l0 += gl) {
+      for (let z0 = 0; z0 < cells; z0 += gc) {
+        for (let x0 = 0; x0 < cells; x0 += gc) {
+          const members = [];
+          for (let l = l0; l < Math.min(levels, l0 + gl); l++) {
+            for (let cz = z0; cz < Math.min(cells, z0 + gc); cz++) {
+              for (let cx = x0; cx < Math.min(cells, x0 + gc); cx++) {
+                members.push(this.at(l, cx, cz));
+              }
+            }
+          }
+          if (!members.length) continue;
+          const lo = members[0];
+          const hi = members[members.length - 1];
+          const group = {
+            building: this, members, remaining: members.length, colliderIndex: -1,
+          };
+          group.colliderIndex = grid.add(
+            lo.centre.x - cellW * 0.5, hi.centre.x + cellW * 0.5,
+            lo.centre.z - cellD * 0.5, hi.centre.z + cellD * 0.5,
+            lo.centre.y - levelHeight * 0.5, hi.centre.y + levelHeight * 0.5,
+            'landmark', group,
+          );
+          for (const m of members) m.group = group;
+          this.groups.push(group);
         }
       }
     }
@@ -752,7 +793,8 @@ export class DestructibleBuilding {
     if (!m.intact) return;
     m.state = MODULE_STATE.DETACHED;
     m.damage = Math.max(m.damage, m.strength);
-    if (m.colliderIndex >= 0) this.grid.remove(m.colliderIndex);
+    // The block's collision group only stops blocking once every block in it is gone.
+    if (m.group && --m.group.remaining <= 0) this.grid.remove(m.group.colliderIndex);
     if (m.level === this.columnTop[m.cell]) this._lowerColumnTop(m.cell);
 
     // Thrown out of the wound, hardest at the centre of it and falling away with
@@ -765,8 +807,12 @@ export class DestructibleBuilding {
       const away = _v1.copy(m.centre).sub(impact.position);
       const dist = Math.max(1, away.length());
       away.normalize();
+      // The falloff is gentler than it was: at 30/dist only the blocks right at the
+      // wound were really thrown and the rest sagged out, so the spray had a hard
+      // edge a few metres wide. Half the blast radius keeps most of the opening
+      // moving at speed and still lets the far side of the building merely drop.
       thrown = clamp(impact.strength * DESTRUCTION.BLAST_PUSH, 0, DESTRUCTION.BLAST_PUSH_MAX)
-        * clamp(30 / dist, 0.12, 1);
+        * clamp(70 / dist, 0.15, 1);
       m.velocity.copy(away).multiplyScalar(thrown * 0.75);
       m.velocity.addScaledVector(impact.direction ?? away, thrown * 0.3);
       m.velocity.y += thrown * DESTRUCTION.BLAST_LIFT;
@@ -868,12 +914,17 @@ export class DestructibleBuilding {
       // it, and one thrown clear comes to rest on the neighbours' roofs.
       // Three candidate surfaces: the street or the nearest roof, the building still
       // standing under this point, and the wreckage already down in this column.
+      const cell = this.cellAt(m.centre.x, m.centre.z);
       const standing = this.moduleUnder(m.centre.x, m.centre.z, m.centre.y);
       const onStructure = standing ? standing.centre.y + standing.size.y * 0.5 : -Infinity;
-      const onRubble = this.pileTopAt(m.centre.x, m.centre.z);
-      const surface = Math.max(
-        groundAt(m.centre.x, m.centre.z, wasAbove), onStructure, onRubble,
-      );
+      const onRubble = cell < 0 ? -Infinity : this.pile[cell];
+      // Over its own footprint there is nothing the world can offer that this
+      // building does not already know about - its own structure, its own rubble and
+      // the plaza - so the world query is skipped entirely. It is only worth asking
+      // for blocks thrown clear, which is where the neighbours' roofs are.
+      const surface = cell >= 0
+        ? Math.max(this.groundLevel, onStructure, onRubble)
+        : Math.max(groundAt(m.centre.x, m.centre.z, wasAbove), onStructure, onRubble);
       const floor = surface + m.size.y * 0.5;
       if (m.centre.y <= floor) {
         m.centre.y = floor;
@@ -996,12 +1047,16 @@ export class DestructibleBuilding {
       m.breakup = 0;
       this.shell.place(m.visual, m.origin, m.quaternion);
       this.shell.damage(m.visual, 0);
-      // Its box never moved - a module in the air is not something to fly into, so
-      // detaching retires the collider rather than dragging it along - which means
-      // putting the building back is only a matter of putting the box back in play.
-      if (m.colliderIndex >= 0) this.grid.revive(m.colliderIndex);
+
     }
     this.shell.flush();
+    // Collision boxes never moved - a block in the air is not something to fly into,
+    // so detaching retires its group rather than dragging it along - which means
+    // putting the building back is only a matter of putting the boxes back in play.
+    for (const g of this.groups) {
+      g.remaining = g.members.length;
+      this.grid.revive(g.colliderIndex);
+    }
     for (const p of this.props) {
       p.reset();
       if (p.colliderIndex >= 0) this.grid.revive(p.colliderIndex);

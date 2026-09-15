@@ -548,13 +548,13 @@ function buildTwinTowers(g, grid, L, mats) {
   const glass = towerMaterial();
   g.userData.towerMaterial = glass;
 
-  // Thirty-four storeys of seven-by-seven cells: blocks about ten metres square and
-  // thirteen tall, sixteen hundred and sixty-six to a tower. Fine enough that an
-  // aircraft tears a ragged opening and throws a spray of rubble out of it rather
-  // than removing tidy rectangles; coarse enough that a full collapse is a couple of
-  // thousand bodies rather than tens of thousands.
-  const LEVELS = 34;
-  const CELLS = 7;
+  // Forty-two storeys of nine-by-nine cells: blocks about seven and a half metres
+  // square and eleven tall, three and a half thousand to a tower. Fine enough that
+  // an aircraft tears a ragged opening and throws a proper spray of rubble out of
+  // it; coarse enough that a full collapse is a few thousand bodies rather than tens
+  // of thousands.
+  const LEVELS = 42;
+  const CELLS = 9;
 
   const beacons = [];
   const towers = [];

@@ -558,10 +558,18 @@ export class ObstacleGrid {
    * away that the city is a set of boxes rather than a city.
    */
   surfaceBelow(x, z, ceiling = Infinity) {
+    // Walks the one cell the point falls in directly rather than going through
+    // candidates(). A point needs no dedup across cells and no generator, and this
+    // is the hottest query in the game: every falling body asks it every frame, and
+    // during a collapse there are thousands of them.
+    const c = this.cellSize;
+    const list = this.cells.get(this._key(Math.floor(x / c), Math.floor(z / c)));
+    if (!list) return -Infinity;
     let best = -Infinity;
-    for (const b of this.candidates(x, z, 0)) {
+    for (let i = 0; i < list.length; i++) {
+      const b = this.boxes[list[i]];
+      if (b.alive === false || b.top > ceiling || b.top <= best) continue;
       if (x < b.minX || x > b.maxX || z < b.minZ || z > b.maxZ) continue;
-      if (b.top > ceiling || b.top <= best) continue;
       best = b.top;
     }
     return best;
