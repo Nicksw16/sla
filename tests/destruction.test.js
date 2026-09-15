@@ -114,14 +114,27 @@ const counts = (t) => {
   return n;
 };
 
-/** Runs the simulation until nothing is moving, or the budget runs out. */
-function settle(w, seconds = 40, dt = 1 / 60) {
+/**
+ * Runs the simulation until the wreckage stops moving.
+ *
+ * Stillness, not `anyActive`: a settled slab stays in the falling list until its
+ * lifetime retires it half a minute later, so waiting for the list to empty means
+ * waiting for the street to be swept and finding nothing to look at.
+ */
+const STILL = 1e-4;                       // velocity-squared at which a body is at rest
+
+function settle(w, seconds = 40, { untilCleared = false, dt = 1 / 60 } = {}) {
   const focus = new THREE.Vector3(TWINS.x, BASE + H * 0.5, TWINS.z + 300);
   let steps = 0;
+  let quiet = 0;
   for (let t = 0; t < seconds; t += dt) {
     w.field.update(dt, focus, GROUND);
     steps++;
     if (!w.field.anyActive) break;
+    if (untilCleared) continue;
+    const moving = w.towers.some((b) => b.falling.some((m) => m.velocity.lengthSq() > STILL));
+    quiet = moving ? 0 : quiet + dt;
+    if (quiet > 1.5) break;
   }
   return steps;
 }
@@ -449,21 +462,118 @@ test('a collapsed tower stops being something to fly into', () => {
 });
 
 // --- physics ---------------------------------------------------------------------
-test('detached modules fall, land on the ground and go to sleep', () => {
+test('detached modules fall, come to rest or break up, and stop moving', () => {
   const w = world();
   const t = w.towers[0];
   levelTheBase(w, 0);
   const airborne = t.falling.slice();
   assert.ok(airborne.length > 8, `${airborne.length} bodies in the air`);
   const startY = airborne.map((m) => m.centre.y);
+  const top = t.origin.y + t.height;
   settle(w);
-  for (let i = 0; i < airborne.length; i++) {
-    const m = airborne[i];
-    assert.ok(m.centre.y < startY[i] + 1, 'it went down, not up');
-    assert.ok(m.velocity.length() < 0.01, 'and stopped moving');
+  for (const m of airborne) {
+    assert.ok(m.velocity.lengthSq() <= STILL, 'nothing is still moving');
     assert.ok(m.centre.y >= GROUND(m.centre.x, m.centre.z) - 0.01, 'never through the floor');
+    assert.ok(m.centre.y <= top, 'and nothing ended up above where the tower stood');
     assert.ok([MODULE_STATE.SETTLED, MODULE_STATE.DESTROYED].includes(m.state), m.state);
   }
+  // A single slab can finish higher than it started - it can come to rest on the pile
+  // that built up under it - so what is checked is the building coming down, not each
+  // piece descending monotonically.
+  const mean = (a) => a.reduce((sum, v) => sum + v, 0) / a.length;
+  const before = mean(startY);
+  const after = mean(airborne.map((m) => m.centre.y));
+  assert.ok(after < before - t.height * 0.2,
+    `the wreckage is far below where it stood (${before.toFixed(0)} m to ${after.toFixed(0)} m)`);
+});
+
+test('the collapse walks down the building as the wreckage lands on it', () => {
+  const w = world();
+  const t = w.towers[0];
+  // One hit high up. Everything above it loses its support and falls - and then the
+  // falling mass arrives on the storey below the hit, which was untouched and fully
+  // supported a moment ago, and that storey gives way too. Nothing schedules this:
+  // the front moves down because each storey it takes lengthens the fall onto the
+  // next one, which is what makes the blow bigger every time.
+  const y = BASE + H * 0.78;
+  const first = counts(t).gone;
+  fly(w, { y, ...FASTEST });
+  const atImpact = counts(t).gone;
+  assert.ok(atImpact > first, 'the hit took something');
+  const cutLevel = t.levelAt(y);
+  const intactBelowAtImpact = t.modules.filter((m) => m.level < cutLevel - 1 && m.intact).length;
+
+  const focus = new THREE.Vector3(TWINS.x, BASE + H * 0.5, TWINS.z + 300);
+  const seen = [atImpact];
+  for (let step = 0; step < 60 * 12; step++) {
+    w.field.update(1 / 60, focus, GROUND);
+    if (step % 60 === 0) seen.push(counts(t).gone);
+  }
+  const final = counts(t).gone;
+  assert.ok(final > atImpact,
+    `the collapse continued after the impact frame (${seen.join(' -> ')})`);
+  const intactBelowAtEnd = t.modules.filter((m) => m.level < cutLevel - 1 && m.intact).length;
+  assert.ok(intactBelowAtEnd < intactBelowAtImpact,
+    'and it worked downward, into storeys the aircraft never touched');
+  assert.equal(t.standing, true, 'without taking the whole building with it');
+});
+
+test('what a falling block does to the floor scales with how far it fell', () => {
+  // The pancake, on its own. Cut a column loose above one floor, lift it clear, and
+  // drop it: a storey's fall bruises the floor, a long one goes through it. That
+  // difference is the entire mechanism behind a collapse that accelerates instead of
+  // stopping, and it is arithmetic on the impact speed rather than a script.
+  const drop = (metres) => {
+    const w = world();
+    const t = w.towers[0];
+    // The topmost block of a column, so exactly one block falls and exactly one
+    // floor is underneath it. A whole cut column landing is a different question -
+    // fifteen blows rather than one - and is what the collapse test covers.
+    const block = t.at(t.levels - 1, 1, 1);
+    const target = t.at(t.levels - 2, 1, 1);
+    t._detach(block, null);
+    block.centre.y += metres;
+    block.velocity.set(0, 0, 0);
+    block.spin.set(0, 0, 0);
+    for (let i = 0; i < 60 * 30 && block.state === MODULE_STATE.DETACHED; i++) {
+      t.update(1 / 60, GROUND, null, true);
+    }
+    return { damage: target.damage, intact: target.intact, strength: target.strength };
+  };
+
+  const shortFall = drop(25);
+  assert.ok(shortFall.damage > 0, 'one storey bruises the floor under it');
+  assert.equal(shortFall.intact, true,
+    `and does not go through (${shortFall.damage.toFixed(2)} of ${shortFall.strength.toFixed(2)})`);
+
+  const longFall = drop(300);
+  assert.ok(longFall.damage > shortFall.damage * 2,
+    `a long fall hits far harder (${shortFall.damage.toFixed(2)} vs ${longFall.damage.toFixed(2)})`);
+  assert.equal(longFall.intact, false, 'and goes straight through it');
+});
+
+test('the wreckage piles up instead of ending at one height', () => {
+  const w = world();
+  const t = w.towers[0];
+  levelTheBase(w, 0);
+  settle(w);
+  const resting = t.modules
+    .filter((m) => m.state === MODULE_STATE.SETTLED)
+    .map((m) => m.centre.y - t.origin.y);
+  assert.ok(resting.length > 8, `${resting.length} slabs came to rest`);
+  const spread = Math.max(...resting) - Math.min(...resting);
+  assert.ok(spread > t.moduleSize.y,
+    `the pile is deeper than a single slab (${spread.toFixed(0)} m across `
+    + `${resting.length} slabs ${t.moduleSize.y.toFixed(0)} m thick)`);
+  // And it is a mound, not the building stacked back up where it stood.
+  const mound = Math.max(...resting);
+  assert.ok(mound < t.height * 0.55,
+    `the rubble is ${mound.toFixed(0)} m of a ${t.height} m building`);
+  const pulverised = t.modules.filter((m) => m.state === MODULE_STATE.DESTROYED).length;
+  assert.ok(pulverised > t.modules.length * 0.4,
+    `most of it broke up rather than surviving as slabs (${pulverised}/${t.modules.length})`);
+  console.log(`       rubble mound ${mound.toFixed(0)} m of ${t.height} m · `
+    + `${pulverised} of ${t.modules.length} blocks pulverised`);
 });
 
 test('wreckage piles on the stump instead of falling through it', () => {
@@ -514,13 +624,13 @@ test('a falling slab comes to rest on the roof under it', () => {
     GROUND(x, z),
     !overTower(x, z) && roofY <= ceiling ? roofY : -Infinity,
   );
-  for (let i = 0; i < 60 * 30 && m.state !== MODULE_STATE.SETTLED; i++) {
-    t.update(1 / 60, ground, null, true);
-  }
-  assert.equal(m.state, MODULE_STATE.SETTLED);
+  const done = () => m.state === MODULE_STATE.SETTLED || m.state === MODULE_STATE.DESTROYED;
+  for (let i = 0; i < 60 * 30 && !done(); i++) t.update(1 / 60, ground, null, true);
+  // It either came to rest on that roof or broke up on it. Both finish at the roof.
+  assert.ok(done(), m.state);
   const floor = ground(m.centre.x, m.centre.z) + m.size.y * 0.5;
   assert.ok(Math.abs(m.centre.y - floor) < 0.5,
-    `rested at ${m.centre.y.toFixed(1)}, surface under it ${floor.toFixed(1)}`);
+    `finished at ${m.centre.y.toFixed(1)}, surface under it ${floor.toFixed(1)}`);
 });
 
 test('a slab that misses the building entirely lands in the street', () => {
@@ -542,7 +652,7 @@ test('a settled pile is eventually cleared away', () => {
   fly(w, { ...FASTEST });
   const dropped = t.falling.length;
   assert.ok(dropped > 0);
-  settle(w, DESTRUCTION.SETTLED_LIFETIME + 25);
+  settle(w, DESTRUCTION.SETTLED_LIFETIME + 40, { untilCleared: true });
   assert.equal(t.falling.length, 0, 'the street is clear again');
 });
 

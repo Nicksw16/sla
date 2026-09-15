@@ -501,13 +501,33 @@ class Game {
     this._pendingResult = { result, payload };
 
     this.state = STATE.OUTRO;
-    this._outroTimer = success ? 1.6 : 2.6;
-    this.cameraController.startCinematic(this.flight.position, {
-      duration: this._outroTimer + 0.4,
-      radius: success ? 52 : 38,
-      height: success ? 16 : 10,
-      spin: success ? 0.55 : 0.9,
-    });
+    // Losing is worth sitting with. The old two and a half seconds cut from the
+    // wreck to a scoreboard before the wreck had finished happening, which is the
+    // one moment in a flight game nobody wants hurried - and if the crash brought a
+    // building down with it, the shot pulls back and holds on that instead of on the
+    // burning airframe, for long enough that the slabs reach the street.
+    const felled = this._structureHitAt
+      && performance.now() - this._structureHitAt < 2500
+      && this._structureFocus;
+    if (success) {
+      this._outroTimer = 2.2;
+      this.cameraController.startCinematic(this.flight.position, {
+        duration: this._outroTimer + 0.4, radius: 52, height: 16, spin: 0.55,
+      });
+    } else if (felled) {
+      this._outroTimer = 9;
+      this.cameraController.startCinematic(this._structureFocus, {
+        duration: this._outroTimer + 0.4,
+        radius: this._structureSpan * 1.25,
+        height: this._structureSpan * 0.4,
+        spin: 0.22,
+      });
+    } else {
+      this._outroTimer = 5.5;
+      this.cameraController.startCinematic(this.flight.position, {
+        duration: this._outroTimer + 0.4, radius: 38, height: 10, spin: 0.9,
+      });
+    }
     if (!success) this.audio?.quietEngines();
     document.getElementById('cinematic-bars')?.classList.remove('hidden');
   }
@@ -836,8 +856,8 @@ class Game {
       // tower rather than at the wreck: the collapse is four hundred metres of
       // building, and the burning airframe is the least of it.
       const shot = felled
-        ? { duration: 7.5, radius: this._structureSpan * 1.25, height: this._structureSpan * 0.4, spin: 0.22 }
-        : { duration: 2.6, radius: 34, height: 12, spin: 0.9 };
+        ? { duration: 9.5, radius: this._structureSpan * 1.25, height: this._structureSpan * 0.4, spin: 0.22 }
+        : { duration: 4.5, radius: 44, height: 16, spin: 0.7 };
       this._freeFlightRespawn = shot.duration;
       this.cameraController.startCinematic(felled ? this._structureFocus : wreck, shot);
     }

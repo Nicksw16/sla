@@ -73,8 +73,24 @@ export const DESTRUCTION = {
   FRICTION: 0.6,
   SLEEP_SPEED: 1.6,
   SLEEP_TIME: 0.6,
+  // What a falling block does to the floor it lands on, as a speed: damage is the
+  // impact speed over this, so a block that has dropped one storey bruises the one
+  // underneath and a block that has fallen two hundred metres goes through it. That
+  // is the whole of progressive collapse - the front accelerates because each storey
+  // it takes lengthens the fall onto the next, and nothing anywhere schedules it.
+  PANCAKE_SPEED: 65,
+  PANCAKE_MAX: 3,
+  // Masonry does not survive arriving at terminal velocity. Accumulated impact speed
+  // past this and the block stops being a block and becomes the rubble it throws off.
+  BREAKUP_SPEED: 38,
+  // Slabs land skewed and interlock, so a stack of them is shorter than the sum of
+  // their thicknesses. Measured against the shipped towers: at these two numbers a
+  // full collapse pulverises about five sixths of the building and leaves a mound
+  // roughly a third of its height. Left at 1.0 and without break-up, the wreckage of
+  // a four-hundred-metre tower piled back up to four hundred metres.
+  PILE_COMPACTION: 0.4,
   // Budgets. These ceilings are what keep a collapse off the frame budget.
-  MAX_PHYSICAL_MODULES: 160,
+  MAX_PHYSICAL_MODULES: 340,
   // How many detachments in one batch are worth an effect. A tower shearing in half
   // is one event to the player, not eighty, and eighty would empty the particle pool
   // on the first frame of it.
@@ -231,6 +247,7 @@ export class StructuralModule {
     this.quaternion = new THREE.Quaternion();
     this.restTimer = 0;
     this.age = 0;
+    this.breakup = 0;             // accumulated impact speed since it came away
   }
 
   get intact() {
@@ -384,6 +401,10 @@ export class DestructibleBuilding {
     this.props = [];
     this.collapsed = false;
     this.damaged = false;
+    // How high the wreckage stands in each column of the plan. Without it every
+    // slab in a collapse falls to the same height and the tower reads as melting
+    // into the ground instead of piling up on it.
+    this.pile = new Float32Array(cells * cells).fill(-Infinity);
     this.onEvent = null;
 
     const levelHeight = height / levels;
@@ -478,16 +499,28 @@ export class DestructibleBuilding {
    * the wreckage piles on the stump, which is also what a building does.
    */
   supportTopBelow(x, z, y) {
+    const m = this.moduleUnder(x, z, y);
+    return m ? m.centre.y + m.size.y * 0.5 : -Infinity;
+  }
+
+  /** The module still standing directly under a point, or null. */
+  moduleUnder(x, z, y) {
     const cell = this.cellAt(x, z);
-    if (cell < 0) return -Infinity;
+    if (cell < 0) return null;
     const cx = cell % this.cells;
     const cz = (cell / this.cells) | 0;
     const start = Math.min(this.levels - 1, this.levelAt(y));
     for (let level = start; level >= 0; level--) {
       const m = this.at(level, cx, cz);
-      if (m && m.intact) return m.centre.y + m.size.y * 0.5;
+      if (m && m.intact) return m;
     }
-    return -Infinity;
+    return null;
+  }
+
+  /** How high the rubble already stands in the column over a point. */
+  pileTopAt(x, z) {
+    const cell = this.cellAt(x, z);
+    return cell < 0 ? -Infinity : this.pile[cell];
   }
 
   at(level, cx, cz) {
@@ -591,7 +624,12 @@ export class DestructibleBuilding {
    * ends where the structure happens to be able to take it.
    */
   settleStructure(impact = null) {
-    for (let pass = 0; pass < 12; pass++) {
+    // The bound is the height of the building, not a round number. Failure climbs at
+    // most one storey per pass, so a fixed twelve stopped being a fixed point the
+    // moment the lattice grew past twelve levels: a cut low down left the top two
+    // storeys of the sheared columns standing on nothing at all.
+    const limit = this.levels + 2;
+    for (let pass = 0; pass < limit; pass++) {
       const reachable = this._reachableFromGround();
       const doomed = [];
       for (const m of this.modules) {
@@ -674,6 +712,10 @@ export class DestructibleBuilding {
 
   _retire(m) {
     m.state = MODULE_STATE.DESTROYED;
+    // A retired body is not simulated again, so leaving its last velocity on it is a
+    // lie that anything reading the wreckage afterwards will believe.
+    m.velocity.set(0, 0, 0);
+    m.spin.set(0, 0, 0);
     this.shell.hide(m.visual);
   }
 
@@ -702,6 +744,9 @@ export class DestructibleBuilding {
     }
     if (this.falling.length === 0) { this.shell.flush(); return; }
     const g = DESTRUCTION.GRAVITY;
+    // Floors crushed by what landed on them this frame. Collected rather than acted
+    // on inside the loop, so the support pass runs once over a settled structure.
+    const crushed = [];
 
     for (let i = this.falling.length - 1; i >= 0; i--) {
       const m = this.falling[i];
@@ -740,19 +785,52 @@ export class DestructibleBuilding {
       // that slides off the plaza lands on the street rather than at sea level, one
       // that drops straight down piles onto the stump rather than falling through
       // it, and one thrown clear comes to rest on the neighbours' roofs.
-      const floor = Math.max(
-        groundAt(m.centre.x, m.centre.z, wasAbove),
-        this.supportTopBelow(m.centre.x, m.centre.z, m.centre.y),
-      ) + m.size.y * 0.5;
+      // Three candidate surfaces: the street or the nearest roof, the building still
+      // standing under this point, and the wreckage already down in this column.
+      const standing = this.moduleUnder(m.centre.x, m.centre.z, m.centre.y);
+      const onStructure = standing ? standing.centre.y + standing.size.y * 0.5 : -Infinity;
+      const onRubble = this.pileTopAt(m.centre.x, m.centre.z);
+      const surface = Math.max(
+        groundAt(m.centre.x, m.centre.z, wasAbove), onStructure, onRubble,
+      );
+      const floor = surface + m.size.y * 0.5;
       if (m.centre.y <= floor) {
         m.centre.y = floor;
         if (m.velocity.y < -DESTRUCTION.SLEEP_SPEED) {
           const hitSpeed = -m.velocity.y;
+
+          // The structure under this point takes the blow, whether the block came
+          // down on it directly or on the rubble heaped over it - a metre of loose
+          // masonry does not isolate a floor from what lands on top of it. This is
+          // the pancake: if the blow is bigger than the floor, the floor comes away
+          // too and the collapse moves down a storey. The front accelerates on its
+          // own because every storey it takes lengthens the fall onto the next one,
+          // and damage accumulates, so a storey that shrugs off the first block to
+          // reach it does not shrug off the fifteenth. Nothing here is scheduled.
+          if (standing && standing.intact) {
+            const blow = clamp(
+              (m.mass / 900) * hitSpeed / DESTRUCTION.PANCAKE_SPEED,
+              0, DESTRUCTION.PANCAKE_MAX,
+            );
+            if (standing.applyDamage(blow)) crushed.push(standing);
+            else this.shell.damage(standing.visual, 1 - standing.integrity);
+          }
+
           m.velocity.y = hitSpeed * DESTRUCTION.RESTITUTION;
           m.velocity.x *= DESTRUCTION.FRICTION;
           m.velocity.z *= DESTRUCTION.FRICTION;
           m.spin.multiplyScalar(0.5);
           onLanded?.(m, hitSpeed);
+
+          // And the slab itself. Masonry does not survive arriving at speed; past a
+          // point it stops being a block and becomes the rubble it throws off.
+          m.breakup += hitSpeed;
+          if (m.breakup > DESTRUCTION.BREAKUP_SPEED) {
+            this.onEvent?.({ type: 'shatter', module: m, building: this });
+            this._retire(m);
+            this.falling.splice(i, 1);
+            continue;
+          }
         } else {
           m.velocity.set(0, 0, 0);
         }
@@ -767,6 +845,13 @@ export class DestructibleBuilding {
           m.velocity.set(0, 0, 0);
           m.spin.set(0, 0, 0);
           m.age = 0;
+          const cell = this.cellAt(m.centre.x, m.centre.z);
+          if (cell >= 0) {
+            this.pile[cell] = Math.max(
+              this.pile[cell],
+              m.centre.y + m.size.y * 0.5 * DESTRUCTION.PILE_COMPACTION,
+            );
+          }
         }
       } else {
         m.restTimer = 0;
@@ -777,6 +862,14 @@ export class DestructibleBuilding {
         m.quaternion.multiply(_q1.setFromEuler(_e1));
       }
       this.shell.place(m.visual, m.centre, m.quaternion);
+    }
+
+    // One pass for every floor that gave way under the wreckage this frame. Whatever
+    // those floors were holding up now has nothing under it, so it joins the fall -
+    // which is the next storey of the collapse, arrived at rather than scripted.
+    if (crushed.length) {
+      for (const c of crushed) this._detach(c, null);
+      this.settleStructure(null);
     }
     this.shell.flush();
   }
@@ -819,6 +912,7 @@ export class DestructibleBuilding {
       m.quaternion.identity();
       m.restTimer = 0;
       m.age = 0;
+      m.breakup = 0;
       this.shell.place(m.visual, m.origin, m.quaternion);
       this.shell.damage(m.visual, 0);
       // Its box never moved - a module in the air is not something to fly into, so
@@ -834,6 +928,7 @@ export class DestructibleBuilding {
     this.falling.length = 0;
     this.collapsed = false;
     this.damaged = false;
+    this.pile.fill(-Infinity);
     this.shell.setReach(this.shell.tightRadius);
   }
 }
@@ -970,6 +1065,14 @@ export class DestructionField {
         ),
         span: Math.max(e.building.width, e.building.height),
         size: Math.max(m.size.x, m.size.z),
+      });
+    } else if (e.type === 'shatter') {
+      // A block arriving at speed does not stay a block. The pieces it becomes are
+      // what the pile is actually made of.
+      const m = e.module;
+      this.debris?.burst(m.centre, m.size, 14, 13);
+      this.bus?.emit('structure:landed', {
+        point: m.centre.clone(), speed: 55, size: Math.max(m.size.x, m.size.z),
       });
     } else if (e.type === 'prop') {
       this.debris?.burst(e.prop.object.position, this._propExtent, 6, 7);
