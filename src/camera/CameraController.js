@@ -38,6 +38,10 @@ export class CameraController {
 
     this._unsubs = [
       bus.on('damage:hit', (e) => this.addShake(e.shake ?? 0.5)),
+      // Masonry hitting the street, and a tower finishing the job. Scaled by how
+      // hard it landed so a single slab is a tremor and a collapse is not.
+      bus.on('structure:landed', (e) => this.addShake(clamp01((e.speed ?? 20) / 70) * 0.5)),
+      bus.on('structure:collapse', () => this.addShake(1.1)),
       bus.on('flight:impact', (e) => this.addShake(0.3 + e.severity * 0.8)),
       bus.on('flight:landed', (e) => this.addShake(0.15 + (1 - e.quality) * 0.4)),
       bus.on('flight:takeoff', () => this.addShake(0.2)),

@@ -457,9 +457,13 @@ export class ObstacleGrid {
     return cx * 100000 + cz;
   }
 
-  add(minX, maxX, minZ, maxZ, base, top, kind = 'building') {
+  add(minX, maxX, minZ, maxZ, base, top, kind = 'building', ref = null) {
     const idx = this.boxes.length;
-    this.boxes.push({ minX, maxX, minZ, maxZ, base, top, kind });
+    // `ref` lets a caller find out *which* of its own objects was hit, which is what
+    // turns a collision into localised damage rather than a generic bump. `alive`
+    // retires a box without touching the cell lists: the lists hold indices, so
+    // splicing one out would renumber every box after it.
+    this.boxes.push({ minX, maxX, minZ, maxZ, base, top, kind, ref, alive: true });
     const c = this.cellSize;
     for (let cx = Math.floor(minX / c); cx <= Math.floor(maxX / c); cx++) {
       for (let cz = Math.floor(minZ / c); cz <= Math.floor(maxZ / c); cz++) {
@@ -482,7 +486,9 @@ export class ObstacleGrid {
         for (const i of list) {
           if (seen.has(i)) continue;
           seen.add(i);
-          yield this.boxes[i];
+          const b = this.boxes[i];
+          if (b.alive === false) continue;
+          yield b;
         }
       }
     }
@@ -524,6 +530,7 @@ export class ObstacleGrid {
     out.normal.set(best.nx, best.ny, best.nz);
     out.point.set(x, y, z).addScaledVector(out.normal, -best.penetration);
     out.kind = best.box.kind;
+    out.ref = best.box.ref;
     return out;
   }
 
@@ -540,6 +547,18 @@ export class ObstacleGrid {
       if (d < bestDist) { bestDist = d; bestKind = b.kind; }
     }
     return bestDist <= maxDist ? { distance: bestDist, kind: bestKind } : null;
+  }
+
+  /** Retires a box. Its geometry stops colliding; its index stays valid. */
+  remove(index) {
+    const b = this.boxes[index];
+    if (b) b.alive = false;
+  }
+
+  /** Puts a retired box back in play, exactly where it already is. */
+  revive(index) {
+    const b = this.boxes[index];
+    if (b) b.alive = true;
   }
 
   get count() {

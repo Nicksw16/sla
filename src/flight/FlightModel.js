@@ -532,7 +532,18 @@ export class FlightModel {
     const speedFrac = clamp01(this.airspeed / this.spec.maxSpeed);
     const severity = clamp01(speedFrac * (0.35 + 0.65 * closing) * 1.25);
 
-    this._emitImpact({ severity, point: hit.point, normal: hit.normal, kind: 'obstacle' });
+    // `ref` is whatever the collider registered behind that box - a structural module,
+    // for anything that can come apart - and the heading is what turns a hit into a
+    // direction rather than a magnitude. Neither means anything here; both are what
+    // let the world localise the damage.
+    this._emitImpact({
+      severity,
+      point: hit.point,
+      normal: hit.normal,
+      direction: this._forward.clone(),
+      ref: hit.ref ?? null,
+      kind: 'obstacle',
+    });
 
     this.airspeed *= 1 - clamp01(severity) * 0.55;
     this.drift.addScaledVector(hit.normal, this.airspeed * 0.35 + 6);

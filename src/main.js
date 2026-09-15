@@ -401,6 +401,7 @@ class Game {
 
     await this.ui.fade('out', 260);
     this._rebuildAircraftModel();
+    this.world.resetDestruction();
     this.missions.start(id, { assist: this.settings.get('assist') });
     this.contrails.reset(this.flight.position);
     this.particles.clear();
@@ -427,6 +428,9 @@ class Game {
     const spawn = region
       ? { x: region.cx + 400, y: 620, z: region.cz + 900, heading: Math.PI }
       : { x: 600, y: 520, z: 1600, heading: Math.PI * 0.85 };
+    // The city is rebuilt intact for every run: routes were validated against it,
+    // and a tower knocked down in free flight must not be missing from a race.
+    this.world.resetDestruction();
     this.missions.startFreeFlight({
       weather: setup?.weather ?? 'clear',
       hour: setup?.hour ?? 15.5,

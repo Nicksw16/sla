@@ -260,6 +260,9 @@ export class ContrailSystem {
   }
 }
 
+/** Concrete dust, dark enough to survive being added to itself two dozen times. */
+const DUST = new THREE.Color(0x4a4640);
+
 /**
  * Ties the particle pool to game events so the rest of the code never has to think
  * about effects: it emits what happened, and something visible occurs (spec §74).
@@ -278,6 +281,9 @@ export class EffectsDirector {
       bus.on('damage:destroyed', (e) => this._onDestroyed(e)),
       bus.on('flight:landed', (e) => this._onLanded(e)),
       bus.on('checkpoint:passed', (e) => this._onCheckpoint(e)),
+      bus.on('structure:detach', (e) => this._onStructureDetach(e)),
+      bus.on('structure:landed', (e) => this._onStructureLanded(e)),
+      bus.on('structure:collapse', (e) => this._onStructureCollapse(e)),
       bus.on('weather:lightning', () => {}),
     ];
   }
@@ -303,6 +309,40 @@ export class EffectsDirector {
   _onLanded(e) {
     if (!e.position) return;
     this.particles.burst('smoke', e.position, 8, 5, { size: 0.7, life: 0.6 });
+  }
+
+  /**
+   * A slab of building coming away.
+   *
+   * The solid chunks are the debris field's job; what the particles add is the dust
+   * that a broken facade throws off, which is most of what sells the scale - a
+   * thirty-metre module falling silently and cleanly reads as a prop, not a building.
+   *
+   * Dust gets its own tint because the pool blends additively: the stock smoke grey
+   * is bright enough that two dozen overlapping puffs sum past white, and then bloom
+   * finds them and a collapsing tower wears a halo. A darker tint adds less per
+   * particle, which is what lets the column read as dust rather than as light.
+   */
+  _onStructureDetach(e) {
+    if (!e.point) return;
+    const s = (e.size ?? 20) / 20;
+    this.particles.burst('smoke', e.point, Math.round(5 * s), 7,
+      { size: 2.2 * s, life: 1.8, tint: DUST });
+    this.particles.burst('debris', e.point, Math.round(6 * s), 11, { size: 1.4 });
+  }
+
+  /** The dust that goes up when it hits the street. */
+  _onStructureLanded(e) {
+    if (!e.point) return;
+    const force = clamp01((e.speed ?? 20) / 55);
+    this.particles.burst('smoke', e.point, Math.round(4 + force * 7), 5 + force * 9,
+      { size: 2.2 + force * 1.6, life: 2.2, tint: DUST });
+    this.particles.burst('debris', e.point, Math.round(3 + force * 5), 8 + force * 12);
+  }
+
+  _onStructureCollapse(e) {
+    if (!e.point) return;
+    this.particles.burst('smoke', e.point, 16, 14, { size: 3.4, life: 2.8, tint: DUST });
   }
 
   _onCheckpoint(e) {

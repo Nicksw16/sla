@@ -9,6 +9,8 @@ import { createSkyDome, updateSkyDome } from './SkyDome.js';
 import { TimeOfDay } from './TimeOfDay.js';
 import { WeatherManager } from './WeatherManager.js';
 import { TrafficManager } from './TrafficManager.js';
+import { DestructionField } from './Destructible.js';
+import { DebrisField } from '../fx/Debris.js';
 
 /**
  * Owns the world and is the single collision authority.
@@ -29,6 +31,9 @@ export class WorldManager {
     this._hitOut = { normal: new THREE.Vector3(), point: new THREE.Vector3() };
     this._focus = new THREE.Vector3();
     this.timeScale = 0;
+    // Bound once: the destruction integrator asks for the floor under every falling
+    // body every frame, and a fresh closure per frame would be garbage per frame.
+    this._groundAt = (x, z) => collisionHeight(x, z);
   }
 
   async build(onProgress = () => {}) {
@@ -58,11 +63,21 @@ export class WorldManager {
 
     this.landmarks = await step('RAISING LANDMARKS', 0.7, () => createLandmarks(this.grid));
 
+    // Structures that can actually come apart, plus the debris they shed. The field
+    // is built even when nothing in the world is destructible, so the update path and
+    // the impact route are the same either way.
+    this.debris = new DebrisField({ scene: this.scene, settings: this.settings });
+    this.destruction = new DestructionField({ bus: this.bus, debris: this.debris });
+    for (const b of this.landmarks.userData.destructibles ?? []) this.destruction.add(b);
+    // Collisions are already routed through this object, so this is where an impact
+    // becomes structural damage. The flight model stays ignorant of buildings.
+    this._offImpact = this.bus.on('flight:impact', (e) => this.destruction.impact(e));
+
     // Sun-lit haze on everything that fills the screen. Applied after the meshes exist
     // so it picks up the materials they actually ended up with.
     this.atmosphere = createAtmosphere();
     const hazed = new Set();
-    for (const root of [this.city, this.terrain, this.landmarks]) {
+    for (const root of [this.city, this.terrain, this.landmarks, this.debris.mesh]) {
       root?.traverse?.((o) => {
         const mats = Array.isArray(o.material) ? o.material : [o.material];
         for (const m of mats) {
@@ -96,6 +111,7 @@ export class WorldManager {
     this.bus.emit('world:ready', {
       buildings: this.cityStats.buildings,
       colliders: this.grid.count,
+      destructibles: this.destruction.buildings.length,
     });
     return this;
   }
@@ -167,6 +183,7 @@ export class WorldManager {
     this.timeOfDay.follow(this._focus);
     this.weather.update(dt, this.camera.position);
     this.traffic.update(dt, this._focus, this.elapsed);
+    this.destruction.update(dt, this._focus, this._groundAt);
     animateLandmarks(this.landmarks, dt, this.elapsed);
     updateSkyDome(this.sky, this.camera, dt);
 
@@ -277,6 +294,18 @@ export class WorldManager {
     wu.uChop.value = 0.5 + wx.current.wind / 14;
   }
 
+  /**
+   * Puts every destructible back the way it was built.
+   *
+   * A mission is flown against the intact city - its route was validated against it -
+   * so damage does not carry between runs. Called at the start of a flight rather
+   * than at the end of one, so the wreckage is still there while the results screen
+   * orbits it.
+   */
+  resetDestruction() {
+    this.destruction?.reset();
+  }
+
   /** Environment block for FlightModel. */
   environment() {
     return this.weather.environment();
@@ -287,6 +316,8 @@ export class WorldManager {
   }
 
   dispose() {
+    this._offImpact?.();
+    this.debris?.dispose();
     this.terrain?.userData.dispose?.();
     this.water?.userData.dispose?.();
     this.city?.userData.dispose?.();

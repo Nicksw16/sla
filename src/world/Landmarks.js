@@ -3,6 +3,7 @@ import { lerp } from '../core/MathUtils.js';
 import { Rng } from '../core/Rng.js';
 import { LANDMARKS, RUNWAY } from '../data/regions.js';
 import { terrainHeight, isWater } from './Terrain.js';
+import { DestructibleBuilding, RigidProp } from './Destructible.js';
 
 /**
  * Hand-placed landmarks (spec §25-26).
@@ -431,9 +432,20 @@ function towerMaterial() {
       .replace('#include <common>', `#include <common>
         varying vec3 vTowerPos;
         varying vec3 vTowerNormal;`)
+      // The shaft is drawn as instances of one module-sized box, so the vertex's own
+      // position is only its place within a slab. What the curtain wall needs is its
+      // place within the *tower*, or the columns and floor lines would restart at
+      // every module seam. The instance matrix is exactly that transform - and it
+      // keeps working once a module detaches, so a slab carries its own stripe of
+      // facade down with it instead of resampling the pattern as it falls.
       .replace('#include <begin_vertex>', `#include <begin_vertex>
-        vTowerPos = position;
-        vTowerNormal = normal;`);
+        #ifdef USE_INSTANCING
+          vTowerPos = (instanceMatrix * vec4(transformed, 1.0)).xyz;
+          vTowerNormal = mat3(instanceMatrix) * normal;
+        #else
+          vTowerPos = position;
+          vTowerNormal = normal;
+        #endif`);
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>
         uniform float uTowerNight;
@@ -454,8 +466,16 @@ function towerMaterial() {
         vec3 tn = abs(normalize(vTowerNormal));
         // Columns every metre and a bit, on whichever face this is. The narrow
         // spacing is the point: it is what gives the facade its grain.
+        //
+        // The axis has to be the one that runs *along* the wall, not the one the wall
+        // faces: on a face whose normal is x, x is the same value at every point on
+        // it, and banding a constant produces one flat tone across the whole facade.
+        // That is what these towers were doing - the columns this function exists to
+        // draw never appeared, and the night windows below banded horizontally
+        // because their bay index was constant too.
+        float alongX = step(tn.z, tn.x);   // 1 on the faces that look along x
         float columns = mix(towerBand(vTowerPos.x, 1.15, 0.30),
-                            towerBand(vTowerPos.z, 1.15, 0.30), step(tn.x, tn.z));
+                            towerBand(vTowerPos.z, 1.15, 0.30), alongX);
         columns *= 1.0 - tn.y;            // never on the roof
         float floors = towerBand(vTowerPos.y, 3.7, 0.10) * (1.0 - tn.y);
 
@@ -468,7 +488,7 @@ function towerMaterial() {
         totalEmissiveRadiance += diffuseColor.rgb * (0.30 * (1.0 - uTowerNight) + 0.04 * uTowerNight);
         // Lit offices after dark, by floor and by bay rather than at random, so the
         // windows come on in blocks the way a real tower's do.
-        float bay = floor(mix(vTowerPos.x, vTowerPos.z, step(tn.x, tn.z)) / 4.6);
+        float bay = floor(mix(vTowerPos.x, vTowerPos.z, alongX) / 4.6);
         float storey = floor(vTowerPos.y / 3.7);
         float lit = step(0.42, fract(sin(bay * 12.9898 + storey * 78.233) * 43758.5453));
         // Once a storey is thinner than a pixel the pattern is being sampled at
@@ -506,8 +526,16 @@ function towerMaterial() {
  *
  * The slot between them is deliberately open air all the way down to the plaza, with
  * the bridge as the only thing spanning it - the same trick as the gap under the
- * bridge deck. Two colliders, one per tower, plus a thin one for the bridge itself,
- * so threading between them is a real line rather than a wall pretending to be one.
+ * bridge deck. Threading between them is a real line rather than a wall pretending
+ * to be one.
+ *
+ * Each shaft is a DestructibleBuilding rather than a box: the same square prism,
+ * drawn as a lattice of instanced modules that the destruction system can take apart
+ * one at a time. Intact, a tower is indistinguishable from the single mesh it
+ * replaced and costs the same one draw call - the shader reads its coordinates
+ * through the instance matrix, so the facade runs continuously across every module
+ * seam and no seam is visible anywhere on it. Both towers come from one description,
+ * so there is no second copy of any of this.
  */
 function buildTwinTowers(g, grid, L, mats) {
   const base = terrainHeight(L.x, L.z);
@@ -520,61 +548,106 @@ function buildTwinTowers(g, grid, L, mats) {
   const glass = towerMaterial();
   g.userData.towerMaterial = glass;
 
+  // Sixteen storeys of three-by-three cells: modules about twenty-three metres square
+  // and twenty-eight tall, a hundred and forty-four to a tower. Coarse enough that a
+  // collapse is a couple of hundred bodies rather than a couple of thousand, fine
+  // enough that an aircraft punches a hole you can see through rather than removing a
+  // quarter of the building - and odd-numbered, so there is a middle column for the
+  // outer ones to be tied back to.
+  const LEVELS = 16;
+  const CELLS = 3;
+
   const beacons = [];
+  const towers = [];
   for (const side of [-1, 1]) {
     const tx = L.x + side * offset;
+    const tower = new DestructibleBuilding({
+      name: side < 0 ? 'GEMINI WEST' : 'GEMINI EAST',
+      parent: g,
+      grid,
+      material: glass,
+      origin: new THREE.Vector3(tx, base, L.z),
+      width: a * 2,
+      depth: a * 2,
+      height: h,
+      levels: LEVELS,
+      cells: CELLS,
+      // A quarter-storey of curtain wall and floor plate, in the same arbitrary
+      // tonnes the flight model measures aircraft in.
+      moduleMass: 900,
+      baseStrength: 1,
+    });
+    towers.push(tower);
 
-    // One prism, full height, no setbacks and no taper.
-    const shaft = new THREE.Mesh(new THREE.BoxGeometry(a * 2, h, a * 2), glass);
-    shaft.position.set(tx, base + h * 0.5, L.z);
-    shaft.castShadow = true;
-    shaft.receiveShadow = true;
-    g.add(shaft);
+    // A flat roof with a parapet lip, the plant deck inside it, and the obstruction
+    // beacon on top. A tower this shape ends in a hard horizontal edge, and that edge
+    // is most of its silhouette. The three of them ride together on the top storey:
+    // lose most of that storey and the whole cap comes down as one piece.
+    const roof = new THREE.Group();
+    roof.position.set(tx, base + h, L.z);
+    roof.add(mesh(new THREE.BoxGeometry(a * 2.08, h * 0.012, a * 2.08),
+      mats.steel, 0, h * 0.004, 0));
+    roof.add(mesh(new THREE.BoxGeometry(a * 1.1, h * 0.022, a * 1.1),
+      mats.dark, 0, h * 0.015, 0));
+    const beacon = mesh(new THREE.SphereGeometry(h * 0.008, 8, 6), M.beacon(0xff3b30),
+      0, h * 0.034, 0);
+    beacon.castShadow = false;
+    roof.add(beacon);
+    g.add(roof);
+    beacons.push(beacon);
+    tower.addProp(new RigidProp({
+      object: roof,
+      supports: tower.levelModules(LEVELS - 1),
+      required: 0.5,
+      spread: 7,
+    }));
 
-    // A flat roof with a parapet lip, and the plant deck inside it. A tower this
-    // shape ends in a hard horizontal edge, and that edge is most of its silhouette.
-    g.add(mesh(new THREE.BoxGeometry(a * 2.08, h * 0.012, a * 2.08),
-      mats.steel, tx, base + h + h * 0.004, L.z));
-    g.add(mesh(new THREE.BoxGeometry(a * 1.1, h * 0.022, a * 1.1),
-      mats.dark, tx, base + h + h * 0.015, L.z));
-
-    // A skirt at the base, where a tower of this kind meets its plaza.
+    // A skirt at the base, where a tower of this kind meets its plaza. This one is
+    // the plaza rather than the building, so it stays whatever happens above it.
     g.add(mesh(new THREE.BoxGeometry(a * 2.5, h * 0.028, a * 2.5),
       mats.concrete, tx, base + h * 0.014, L.z));
-
-    const beacon = mesh(new THREE.SphereGeometry(h * 0.008, 8, 6), M.beacon(0xff3b30),
-      tx, base + h + h * 0.034, L.z);
-    beacon.castShadow = false;
-    g.add(beacon);
-    beacons.push(beacon);
-
-    // Each shaft gets its own collider, so the slot between them stays open.
-    grid.add(tx - a, tx + a, L.z - a, L.z + a, base, base + h * 1.02, 'landmark');
   }
 
   // --- skybridge, two decks a little over a third of the way up
   const bridgeY = base + h * 0.375;
   const span = offset * 2;
+  const bridge = new THREE.Group();
+  bridge.position.set(L.x, bridgeY, L.z);
   for (const deck of [0, h * 0.019]) {
-    g.add(mesh(new THREE.BoxGeometry(span, h * 0.009, a * 0.62),
-      mats.steel, L.x, bridgeY + deck, L.z));
+    bridge.add(mesh(new THREE.BoxGeometry(span, h * 0.009, a * 0.62),
+      mats.steel, 0, deck, 0));
   }
-  g.add(mesh(new THREE.BoxGeometry(span * 0.94, h * 0.026, a * 0.5),
-    mats.glass, L.x, bridgeY + h * 0.0095, L.z));
-
+  bridge.add(mesh(new THREE.BoxGeometry(span * 0.94, h * 0.026, a * 0.5),
+    mats.glass, 0, h * 0.0095, 0));
   // The two legs that carry it, meeting under the middle of the span in a V.
   for (const side of [-1, 1]) {
     const legLen = h * 0.19;
     const leg = mesh(new THREE.CylinderGeometry(a * 0.05, a * 0.06, legLen, 8),
-      mats.steel, L.x + side * offset * 0.44, bridgeY - legLen * 0.44, L.z);
+      mats.steel, side * offset * 0.44, -legLen * 0.44, 0);
     leg.rotation.z = side * 0.42;
-    g.add(leg);
+    bridge.add(leg);
   }
+  g.add(bridge);
   // A thin collider for the bridge alone: the air above and below it stays flyable.
-  grid.add(L.x - span * 0.5, L.x + span * 0.5, L.z - a * 0.35, L.z + a * 0.35,
-    bridgeY - h * 0.01, bridgeY + h * 0.032, 'landmark');
+  const bridgeCollider = grid.add(
+    L.x - span * 0.5, L.x + span * 0.5, L.z - a * 0.35, L.z + a * 0.35,
+    bridgeY - h * 0.01, bridgeY + h * 0.032, 'landmark',
+  );
+  // The bridge is the one thing here held up by two different buildings, which no
+  // single support graph can express - so it watches the storey it lands on in both
+  // towers and drops when either end runs out from under it. It is registered on the
+  // west tower only because a prop needs one owner to update it; its supports are
+  // what actually decide.
+  const bridgeLevel = towers[0].levelAt(bridgeY);
+  towers[0].addProp(new RigidProp({
+    object: bridge,
+    supports: [...towers[0].levelModules(bridgeLevel), ...towers[1].levelModules(bridgeLevel)],
+    required: 0.65,
+    spread: 4,
+    colliderIndex: bridgeCollider,
+  }));
 
-  return beacons;
+  return { beacons, towers };
 }
 
 
@@ -587,6 +660,7 @@ export function createLandmarks(grid) {
     grass: M.grass(), marking: M.marking(),
   };
   const beacons = [];
+  const destructibles = [];
   let wheel = null;
 
   for (const L of LANDMARKS) {
@@ -600,7 +674,12 @@ export function createLandmarks(grid) {
       case 'dam': buildDam(group, grid, L, mats); break;
       case 'atc': beacons.push(buildControlTower(group, grid, L, mats)); break;
       case 'marina': buildMarina(group, grid, L, mats); break;
-      case 'twins': beacons.push(...buildTwinTowers(group, grid, L, mats)); break;
+      case 'twins': {
+        const twins = buildTwinTowers(group, grid, L, mats);
+        beacons.push(...twins.beacons);
+        destructibles.push(...twins.towers);
+        break;
+      }
       default: break; // 'park' and 'peak' are terrain features, not structures
     }
   }
@@ -610,9 +689,13 @@ export function createLandmarks(grid) {
 
   group.userData.animated = { beacons, wheel, runwayLights: airport.runwayLights };
   group.userData.stats = { trees };
+  // Whatever the destruction system is allowed to take apart. WorldManager picks
+  // these up rather than knowing which landmarks happen to be destructible.
+  group.userData.destructibles = destructibles;
   group.userData.dispose = () => {
     group.traverse((o) => { if (o.isMesh) o.geometry?.dispose?.(); });
     for (const mm of Object.values(mats)) mm.dispose();
+    group.userData.towerMaterial?.dispose();
   };
   return group;
 }
