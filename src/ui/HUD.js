@@ -122,8 +122,10 @@ export class HUD {
 
   onDamage(e) {
     if (e.damage <= 0) return;
-    const label = { light: 'LIGHT DAMAGE', moderate: 'HULL DAMAGE', heavy: 'HEAVY DAMAGE', critical: 'CRITICAL' }[e.band];
-    if (label) this.toast(label, e.band === 'light' ? 'warn' : 'bad', 1.6);
+    // No banner. The hit already announces itself three other ways - the screen
+    // flashes red in proportion to it, the hull bar drops, and the camera is thrown
+    // - and a line of text on top of that was the least informative of the four
+    // while being the one that covered the view of what you had just flown into.
     // A red flash proportional to the hit, because damage you do not notice is
     // damage you cannot learn from (§145).
     this.el.vignette.style.opacity = String(clamp01(e.damage / 50) * 0.9);
