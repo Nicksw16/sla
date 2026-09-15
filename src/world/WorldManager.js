@@ -261,6 +261,11 @@ export class WorldManager {
     if (this.terrain.userData.uniforms) {
       this.terrain.userData.uniforms.uNight.value = night;
     }
+    // The twin towers carry their own curtain wall, so they need telling about dusk
+    // separately from the instanced city.
+    if (this.landmarks?.userData.towerMaterial) {
+      this.landmarks.userData.towerMaterial.userData.uniforms.uTowerNight.value = night;
+    }
 
     // --- water reacts to sun and sea state
     const wu = this.water.userData.uniforms;

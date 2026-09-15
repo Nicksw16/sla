@@ -25,6 +25,7 @@ export function createAtmosphere() {
 /** Patches a lit material's fog so it takes the sun into account. */
 export function applyAerialPerspective(material, atmosphere) {
   const previous = material.onBeforeCompile;
+  const previousKey = material.customProgramCacheKey;
   material.onBeforeCompile = (shader, renderer) => {
     previous?.call(material, shader, renderer);
     shader.uniforms.uSunDirView = atmosphere.uSunDirView;
@@ -55,6 +56,15 @@ export function applyAerialPerspective(material, atmosphere) {
           gl_FragColor.rgb = mix(gl_FragColor.rgb, haze, fogFactor);
         #endif`);
   };
-  material.customProgramCacheKey = () => 'aerial';
+  // The cache key has to be composed, not replaced, for the same reason the compile
+  // hook above is chained. Three caches compiled programs on the material's parameters
+  // and defines plus this key - what onBeforeCompile injected is not part of it - so
+  // returning a bare 'aerial' told the renderer that every hazed material was
+  // interchangeable. Any two of them that were alike in their parameters and differed
+  // only in their own injected code then shared one program, and whichever compiled
+  // first won: the towers' curtain wall was silently rendered with a plain landmark's
+  // shader, with no floor lines and no lit windows, and nothing anywhere reported an
+  // error.
+  material.customProgramCacheKey = () => `aerial|${previousKey ? previousKey.call(material) : ''}`;
   material.needsUpdate = true;
 }
