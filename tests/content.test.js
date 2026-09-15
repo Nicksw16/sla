@@ -10,7 +10,7 @@ import { UPGRADE_TREE, UPGRADE_ORDER, applyUpgrades, PAINTS, upgradeCost } from 
 import { REGIONS, REGION_ORDER, LANDMARKS, RUNWAY } from '../src/data/regions.js';
 import { WEATHER } from '../src/data/weather.js';
 import { SECRETS, SECRET_BY_ID, SECRET_RADIUS, SECRET_REWARD } from '../src/data/secrets.js';
-import { collisionHeight, isOnRunway } from '../src/world/Terrain.js';
+import { collisionHeight, isOnRunway, terrainHeight } from '../src/world/Terrain.js';
 import { generateCity } from '../src/world/CityGenerator.js';
 import { createLandmarks } from '../src/world/Landmarks.js';
 
@@ -308,6 +308,88 @@ test('landmarks sit on or above their ground', () => {
     const ground = collisionHeight(L.x, L.z);
     assert.ok(Number.isFinite(ground), `${L.id}: bad ground`);
     assert.ok(L.height >= 0, `${L.id}: negative height`);
+  }
+});
+
+test('the bridge stands on the channel bed and its road reaches the ground', () => {
+  // The bridge shipped floating. Its deck sat at a fraction of the landmark height
+  // with nothing at all beneath it, and its approach ramps were two flat slabs hanging
+  // in mid-air a hundred and fifty metres off each end, at a height matching neither
+  // the deck nor the shore. Nothing here failed, because nothing here looked: the
+  // beacon under the deck was reachable and every gate was in clear air, which is all
+  // the tests above ask. What follows asks the question a player asks by looking at it -
+  // is this thing holding itself up, and can you drive onto it.
+  const { grid } = generateCity({ seed: 20260912 });
+  createLandmarks(grid);
+  const L = LANDMARKS.find((l) => l.id === 'bridge');
+
+  // The lowest and highest structure the grid reports on the bridge's centreline.
+  const column = (x) => {
+    let low = null; let high = null;
+    for (let y = -40; y < 300; y += 1) {
+      if (grid.sample({ x, y, z: L.z }, 1)) { if (low === null) low = y; high = y; }
+    }
+    return { low, high };
+  };
+  const roadTop = (x) => {
+    // The road itself, ignoring anything standing above it: the first ceiling found
+    // walking up from just above the ground.
+    let top = null;
+    for (let y = Math.max(terrainHeight(x, L.z), 0) + 1; y < 120; y += 1) {
+      if (grid.sample({ x, y, z: L.z }, 1)) top = y; else if (top !== null) break;
+    }
+    return top;
+  };
+
+  // --- the main span is carried by piers founded on the bed, not by nothing.
+  const bed = terrainHeight(L.x, L.z);
+  assert.ok(bed < -10, `the channel should be dredged here, not ${bed.toFixed(0)} m`);
+  const deck = roadTop(L.x);
+  assert.ok(deck > 40 && deck < 160, `the deck is at ${deck} m, which is no height for a road`);
+  let piers = 0;
+  for (let x = L.x - 420; x <= L.x + 420; x += 5) {
+    const { low } = column(x);
+    if (low !== null && low < bed + 6) piers++;
+  }
+  assert.ok(piers >= 2, `nothing carries the deck down to the bed (${piers} soundings)`);
+
+  // --- and the gap under it is still open water, which is the whole point of it.
+  for (const x of [L.x - 120, L.x, L.x + 120]) {
+    assert.ok(!grid.sample({ x, y: 30, z: L.z }, 8), `the channel is blocked at x ${x}`);
+  }
+
+  // --- the road is continuous from the deck out to where it meets the ground, and
+  // every metre of it is either on the ground or standing on something.
+  for (const side of [-1, 1]) {
+    let landed = null;
+    for (let d = 0; d <= 1100 && landed === null; d += 10) {
+      const x = L.x + side * (420 + d);
+      const top = roadTop(x);
+      assert.ok(top !== null, `the road stops in mid-air ${d} m out from the deck (side ${side})`);
+      const ground = Math.max(terrainHeight(x, L.z), 0);
+      // Either the slab is resting on the ground, or the column below it is filled by
+      // a pier within half a bay of here.
+      const resting = top - ground < 12;
+      let propped = false;
+      for (let b = -22; b <= 22 && !propped; b += 4) {
+        const { low } = column(x + b);
+        propped = low !== null && low < ground + 6;
+      }
+      assert.ok(resting || propped,
+        `the road floats ${(top - ground).toFixed(0)} m up at ${d} m out (side ${side})`);
+      // Where the slab is down on the ground the approach is over; past that it is a
+      // street like any other, and not this test's business.
+      if (resting) landed = d;
+    }
+    assert.ok(landed !== null && landed >= 400 && landed <= 1000,
+      `the road meets the ground ${landed} m out, which is not a grade a road could climb`);
+    // And it climbs: the road is higher every step of the way back to the deck.
+    let prev = 0;
+    for (let d = landed; d >= 0; d -= 40) {
+      const top = roadTop(L.x + side * (420 + d));
+      assert.ok(top >= prev - 1, `the approach dips at ${d} m out (side ${side})`);
+      prev = top;
+    }
   }
 });
 

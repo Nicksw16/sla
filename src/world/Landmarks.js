@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { lerp } from '../core/MathUtils.js';
+import { lerp, smoothstep } from '../core/MathUtils.js';
 import { Rng } from '../core/Rng.js';
 import { LANDMARKS, RUNWAY } from '../data/regions.js';
 import { terrainHeight, isWater } from './Terrain.js';
@@ -113,48 +113,215 @@ function buildStadium(g, grid, L, mats) {
   }
 }
 
-/** Northgate Bridge. The gap under the deck is a legal shortcut (spec §24, §34). */
+const _zAxis = new THREE.Vector3(0, 0, 1);
+const _batchM = new THREE.Matrix4();
+const _batchQ = new THREE.Quaternion();
+const _batchP = new THREE.Vector3();
+const _batchS = new THREE.Vector3();
+
+/**
+ * A pile of identically-shaped boxes drawn in one call.
+ *
+ * The bridge needs a few hundred of them - every hanger, every segment of the main
+ * cable, every slab and parapet of the two approach roads - and each one differs only
+ * in where it sits, how long it is and how far it leans. One instanced mesh draws the
+ * lot, which is what lets the bridge be this detailed and still cost less to draw than
+ * the bare slab it replaces.
+ *
+ * The bounding sphere has to be computed from the instances rather than left as the
+ * unit box's, or the whole batch vanishes the moment the camera looks away from the
+ * world origin.
+ */
+class BoxBatch {
+  constructor(material, capacity) {
+    this.mesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), material, capacity);
+    this.mesh.castShadow = true;
+    this.mesh.receiveShadow = true;
+    this.count = 0;
+  }
+
+  /** One box, sized and leaned. `rotZ` is the lean in the x/y plane, in radians. */
+  add(x, y, z, sx, sy, sz, rotZ = 0) {
+    _batchQ.setFromAxisAngle(_zAxis, rotZ);
+    _batchM.compose(_batchP.set(x, y, z), _batchQ, _batchS.set(sx, sy, sz));
+    this.mesh.setMatrixAt(this.count++, _batchM);
+  }
+
+  /** A box spanning two points in the x/y plane, at a fixed z. */
+  span(xa, ya, xb, yb, z, thick, width) {
+    const dx = xb - xa;
+    const dy = yb - ya;
+    const len = Math.hypot(dx, dy);
+    if (len < 0.05) return;
+    this.add((xa + xb) / 2, (ya + yb) / 2, z, len, thick, width, Math.atan2(dy, dx));
+  }
+
+  finish(g) {
+    this.mesh.count = this.count;
+    this.mesh.instanceMatrix.needsUpdate = true;
+    if (!this.count) return null;
+    this.mesh.computeBoundingSphere();
+    g.add(this.mesh);
+    return this.mesh;
+  }
+}
+
+/**
+ * Northgate Bridge. The gap under the deck is a legal shortcut (spec §24, §34).
+ *
+ * The deck is level, sits a chosen height above the water rather than a fraction of the
+ * landmark's height, and stands on two piers that carry on down to the dredged channel
+ * bed. The road gets up to it by climbing: a graded approach on each bank that leaves
+ * the deck at its own height, runs out on piers of its own and settles onto the ground
+ * where the shore is - up one side, across, and down the other.
+ *
+ * None of that was here before. The deck hung at 0.52 of the landmark height with
+ * nothing whatsoever underneath it, and the approach ramps were two flat slabs floating
+ * off each end at a height matching neither the deck nor the ground. From the air the
+ * whole thing read as what it was: a road surface suspended in mid-air over a channel.
+ *
+ * The numbers that matter here are the water and the channel bed, not L.height. The
+ * clearance under the deck is a piece of level design - the mission that flies the
+ * channel passes under it, and a beacon hides beneath it - so it is a height somebody
+ * chose, written down once.
+ */
+const BRIDGE = {
+  DECK_Y: 78,        // deck surface above the water. This is the flyable gap.
+  SPAN_HALF: 420,    // half the main span; the dredged channel is 920 m wide here
+  DECK_W: 34,
+  PIER_FRAC: 0.46,   // where the pylons stand, as a fraction of the half-span
+  GRADE_RUN: 700,    // how far each approach takes to come down from the deck
+  LEVEL_RUN: 160,    // and how much of it carries on at ground level afterwards
+  STATIONS: 30,      // hanger spacing across the span
+  RAMP_SEGS: 22,     // slabs per approach; each one leans a little less than the last
+};
+
 function buildBridge(g, grid, L, mats) {
+  const { DECK_Y: deckY, SPAN_HALF: spanHalf, DECK_W: deckW, PIER_FRAC } = BRIDGE;
   const h = L.height;
-  const deckY = h * 0.52;
-  const spanHalf = 420;
-  const deckW = 34;
-  // Deck, as a thin slab: only the slab itself blocks, so flying under works.
-  const deck = mesh(new THREE.BoxGeometry(spanHalf * 2, 3.4, deckW), mats.concrete, L.x, deckY, L.z);
-  g.add(deck);
-  g.add(mesh(new THREE.BoxGeometry(spanHalf * 2, 2.2, 1.2), mats.steel, L.x, deckY + 2.4, L.z - deckW / 2));
-  g.add(mesh(new THREE.BoxGeometry(spanHalf * 2, 2.2, 1.2), mats.steel, L.x, deckY + 2.4, L.z + deckW / 2));
-  grid.add(L.x - spanHalf, L.x + spanHalf, L.z - deckW / 2, L.z + deckW / 2, deckY - 3, deckY + 4, 'bridge');
+  const pierX = spanHalf * PIER_FRAC;
+  const towerTop = deckY + h - 22;
+  const halfW = deckW / 2;
 
-  // Towers and main cables.
-  for (const side of [-1, 1]) {
-    const tx = L.x + side * spanHalf * 0.46;
-    for (const zo of [-deckW / 2, deckW / 2]) {
-      g.add(mesh(new THREE.BoxGeometry(11, h, 11), mats.red, tx, deckY + h / 2 - 10, L.z + zo));
+  // --- main deck, as a thin slab: only the slab itself blocks, so flying under works.
+  g.add(mesh(new THREE.BoxGeometry(spanHalf * 2, 3.4, deckW), mats.concrete, L.x, deckY, L.z));
+  g.add(mesh(new THREE.BoxGeometry(spanHalf * 2, 0.5, deckW - 3), mats.asphalt, L.x, deckY + 1.95, L.z));
+  g.add(mesh(new THREE.BoxGeometry(spanHalf * 2 - 40, 0.1, 1.1), mats.marking, L.x, deckY + 2.25, L.z));
+  for (const zo of [-halfW, halfW]) {
+    g.add(mesh(new THREE.BoxGeometry(spanHalf * 2, 2.2, 1.2), mats.steel, L.x, deckY + 2.4, L.z + zo));
+  }
+  grid.add(L.x - spanHalf, L.x + spanHalf, L.z - halfW, L.z + halfW, deckY - 3, deckY + 4, 'bridge');
+
+  // --- the cable, as a height above the deck at any point along it.
+  //
+  // A suspension bridge's cable sags between its towers and runs straight down to an
+  // anchorage at each end. The first version had it the wrong way round: hangers over
+  // the two side spans and nothing at all over the main span, so the middle of the
+  // bridge - the part you fly under - hung from nothing.
+  const cableY = (dx) => {
+    const a = Math.abs(dx);
+    if (a <= pierX) {
+      const u = a / pierX;
+      return lerp(deckY + 16, towerTop, u * u);
     }
-    g.add(mesh(new THREE.BoxGeometry(30, 5, deckW + 14), mats.red, tx, deckY + h - 16, L.z));
-    grid.add(tx - 7, tx + 7, L.z - deckW / 2 - 7, L.z + deckW / 2 + 7, deckY - 10, deckY + h - 10, 'landmark');
+    return lerp(towerTop, deckY + 5, (a - pierX) / (spanHalf - pierX));
+  };
 
-    // Hangers: thin verticals from the catenary down to the deck.
-    for (let i = 1; i < 13; i++) {
-      const t = i / 13;
-      const hx = lerp(tx, L.x + side * spanHalf, t);
-      const sag = Math.sin(t * Math.PI) * 0;
-      const topY = lerp(deckY + h - 22, deckY + 8, t * t) + sag;
-      const height = topY - deckY;
-      if (height < 2) continue;
-      for (const zo of [-deckW / 2, deckW / 2]) {
-        const cable = mesh(new THREE.CylinderGeometry(0.4, 0.4, height, 4), mats.steel, hx, deckY + height / 2, L.z + zo);
-        cable.castShadow = false;
-        g.add(cable);
+  // --- piers and pylons. The pier is founded on the bed and carries the deck; the
+  // pylon stands on the pier and carries the cable.
+  const bed = terrainHeight(L.x, L.z);
+  for (const side of [-1, 1]) {
+    const tx = L.x + side * pierX;
+    g.add(mesh(new THREE.BoxGeometry(30, 15, deckW + 24), mats.concrete, tx, -1, L.z));
+    for (const zo of [-halfW, halfW]) {
+      g.add(mesh(new THREE.BoxGeometry(15, deckY - bed, 15), mats.concrete, tx, (bed + deckY) / 2, L.z + zo));
+      g.add(mesh(new THREE.BoxGeometry(11, h, 11), mats.red, tx, deckY + h / 2, L.z + zo));
+    }
+    g.add(mesh(new THREE.BoxGeometry(30, 5, deckW + 14), mats.red, tx, towerTop + 6, L.z));
+    g.add(mesh(new THREE.BoxGeometry(22, 4, deckW + 8), mats.red, tx, deckY + h * 0.45, L.z));
+    grid.add(tx - 8, tx + 8, L.z - halfW - 8, L.z + halfW + 8, bed, deckY + h, 'landmark');
+  }
+
+  // --- cable and hangers, both batched into one draw call.
+  const stations = Math.round((spanHalf * 2) / BRIDGE.STATIONS);
+  const rigging = new BoxBatch(mats.steel, stations * 4 + 8);
+  for (const zo of [-halfW, halfW]) {
+    let px = -spanHalf;
+    let py = cableY(px);
+    for (let i = 1; i <= stations; i++) {
+      const dx = lerp(-spanHalf, spanHalf, i / stations);
+      const y = cableY(dx);
+      rigging.span(L.x + px, py, L.x + dx, y, L.z + zo, 1.5, 1.5);
+      px = dx; py = y;
+      // One hanger per station, except where the cable has already met the deck.
+      const drop = y - (deckY + 2);
+      if (drop > 4) rigging.add(L.x + dx, deckY + 2 + drop / 2, L.z + zo, 0.7, drop, 0.7);
+    }
+  }
+  rigging.finish(g);
+
+  // --- the approaches: a road that climbs.
+  //
+  // The profile eases out of the deck, grades down at about one in ten and eases onto
+  // the ground, and is then clamped to the terrain so the last stretch follows the
+  // shore rather than burying itself in it. Every slab that ends up more than a few
+  // metres clear of the ground gets a pier under it, which is the difference between a
+  // road on an embankment and a road hanging in the air.
+  const run = BRIDGE.GRADE_RUN + BRIDGE.LEVEL_RUN;
+  const segs = BRIDGE.RAMP_SEGS;
+  const road = new BoxBatch(mats.asphalt, segs * 2 + 4);
+  const parapet = new BoxBatch(mats.concrete, segs * 4 + 8);
+  const stripe = new BoxBatch(mats.marking, segs * 2 + 4);
+  const piers = new BoxBatch(mats.concrete, segs * 6 + 8);
+
+  for (const side of [-1, 1]) {
+    const x0 = L.x + side * spanHalf;
+    const foot = terrainHeight(x0 + side * BRIDGE.GRADE_RUN, L.z);
+    const profile = (t) => {
+      const x = x0 + side * run * t;
+      const graded = lerp(deckY, foot + 2.4, smoothstep(0, BRIDGE.GRADE_RUN / run, t));
+      return { x, y: Math.max(graded, terrainHeight(x, L.z) + 2.4) };
+    };
+
+    let a = profile(0);
+    for (let i = 1; i <= segs; i++) {
+      const b = profile(i / segs);
+      const lean = Math.atan2(b.y - a.y, b.x - a.x);
+      const mx = (a.x + b.x) / 2;
+      const my = (a.y + b.y) / 2;
+      const len = Math.hypot(b.x - a.x, b.y - a.y);
+      road.add(mx, my, L.z, len, 3.4, deckW, lean);
+      stripe.add(mx, my + 1.85, L.z, len * 0.92, 0.1, 1.1, lean);
+      for (const zo of [-halfW, halfW]) {
+        parapet.add(mx, my + 1.6, L.z + zo, len, 2, 1.2, lean);
       }
+
+      // A pier under the slab wherever the road is clear of the ground, founded on the
+      // bed where that ground is under water.
+      const ground = terrainHeight(mx, L.z);
+      const clearance = my - 1.7 - ground;
+      if (clearance > 7) {
+        for (const zo of [-deckW * 0.3, deckW * 0.3]) {
+          piers.add(mx, ground + clearance / 2, L.z + zo, 4.4, clearance, 4.4);
+        }
+        piers.add(mx, my - 2.4, L.z, 9, 2.2, deckW + 4);
+        // The pier blocks, as the pylons do. A bridge you can fly through the legs of
+        // is the same class of wrong as a bridge with no legs at all.
+        grid.add(mx - 5, mx + 5, L.z - deckW * 0.3 - 3, L.z + deckW * 0.3 + 3,
+          ground, my - 1.3, 'bridge');
+      }
+
+      const lo = Math.min(a.y, b.y);
+      const hi = Math.max(a.y, b.y);
+      grid.add(Math.min(a.x, b.x), Math.max(a.x, b.x), L.z - halfW, L.z + halfW,
+        lo - 3, hi + 4, 'bridge');
+      a = b;
     }
   }
-  // Approach ramps down to the shore.
-  for (const side of [-1, 1]) {
-    const rx = L.x + side * (spanHalf + 150);
-    g.add(mesh(new THREE.BoxGeometry(300, 3.4, deckW), mats.concrete, rx, deckY * 0.62, L.z));
-  }
+  road.finish(g);
+  parapet.finish(g);
+  stripe.finish(g);
+  piers.finish(g);
 }
 
 function buildWheel(g, grid, L, mats) {

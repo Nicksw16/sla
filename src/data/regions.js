@@ -147,7 +147,7 @@ export const LANDMARKS = [
   { id: 'skylineTower', name: 'SKYLINE TOWER', x: 120, z: -60, height: 540, region: 'central', type: 'spire' },
   { id: 'obelisk', name: 'THE OBELISK', x: 3180, z: 180, height: 392, region: 'financial', type: 'obelisk' },
   { id: 'stadium', name: 'RIDGEWAY STADIUM', x: -3260, z: -520, height: 62, region: 'residential', type: 'stadium' },
-  { id: 'bridge', name: 'NORTHGATE BRIDGE', x: 700, z: 3560, height: 186, region: 'harbor', type: 'bridge' },
+  { id: 'bridge', name: 'NORTHGATE BRIDGE', x: 700, z: 3560, height: 150, region: 'harbor', type: 'bridge' },
   { id: 'wheel', name: 'SKYLINE WHEEL', x: -3020, z: 3720, height: 124, region: 'beach', type: 'wheel' },
   { id: 'cranes', name: 'CONTAINER QUAY', x: -340, z: 3980, height: 78, region: 'harbor', type: 'cranes' },
   { id: 'dam', name: 'VALLEY DAM', x: -240, z: -4020, height: 96, region: 'countryside', type: 'dam' },
