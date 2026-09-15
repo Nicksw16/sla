@@ -171,11 +171,19 @@ export class ModuleShell {
     this.mesh.instanceColor.setUsage(THREE.DynamicDrawUsage);
   }
 
-  /** Scorches an instance by how much of its strength is gone, in [0, 1]. */
+  /**
+   * Scorches an instance by how much of its strength is gone, in [0, 1].
+   *
+   * Squared, so a block that has been lightly shaken by a blast forty metres away is
+   * barely marked while one at the edge of the wound is black. Linear looked right
+   * on blocks the size of a room; on blocks the size of a car it turned the whole
+   * blast radius into a speckled checkerboard that read as noise rather than damage.
+   */
   damage(index, amount) {
     const t = clamp01(amount);
+    const k = t * t;
     this.mesh.setColorAt(index, this._colour.setRGB(
-      1 - t * 0.55, 1 - t * 0.6, 1 - t * 0.62,
+      1 - k * 0.6, 1 - k * 0.65, 1 - k * 0.67,
     ));
     this._tinted = true;
   }
