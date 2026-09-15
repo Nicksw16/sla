@@ -829,6 +829,17 @@ async function flyMission(page, budgetMs) {
 
   let lastPassed = 0;
   let lastReport = Date.now();
+  // How much simulated time should pass between one decision and the next. A pilot
+  // that decides every eighty milliseconds of *wall* time is a different pilot on
+  // every machine: the simulation advances by a clamped delta per frame, so a faster
+  // renderer moves the aircraft further between two decisions and the same pilot
+  // overshoots every gate. Measured here: at eleven frames a second it flew the
+  // route, at twelve it managed two gates of six. Pacing on the game's own clock is
+  // what makes this a test of whether the route can be flown rather than of how fast
+  // the machine renders it.
+  const STEP = 0.3;
+  let lastClock = null;
+  let pause = 80;
   while (Date.now() < deadline) {
     let s;
     try {
@@ -843,6 +854,9 @@ async function flyMission(page, budgetMs) {
       const local = to.clone().applyQuaternion(f.quaternion.clone().invert());
       return {
         done: false,
+        // Simulated seconds since the world was built. The pilot paces itself by
+        // this rather than by the wall clock - see the sleep at the end of the loop.
+        clock: g.world.elapsed,
         state: g.missions.state,
         passed: st.checkpointIndex,
         total: st.checkpointTotal,
@@ -897,7 +911,17 @@ async function flyMission(page, budgetMs) {
       console.log(`       ${err.message}; ending the hand-flown section`);
       break;
     }
-    await sleep(80);
+
+    // Adapt the wait so that roughly STEP seconds of simulated time pass per
+    // decision, whatever the frame rate. The floor is zero - on a slow enough
+    // renderer the round trip alone is longer than the target and the pilot simply
+    // runs as fast as it can, which is the old behaviour.
+    if (lastClock !== null && s.clock > lastClock) {
+      const advanced = s.clock - lastClock;
+      pause = Math.max(0, Math.min(200, pause * (STEP / advanced)));
+    }
+    lastClock = s.clock;
+    if (pause > 0) await sleep(pause);
   }
 
   await setKeys(new Set()).catch(() => {});
