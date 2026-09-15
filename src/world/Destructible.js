@@ -48,10 +48,10 @@ export const DESTRUCTION = {
   // simulation happens to be chopping that building into, and a faster one should
   // open a bigger one: the radius grows with the energy delivered, up to a gash
   // about two thirds of the way across one of these towers.
-  BLAST_BASE: 13,
-  BLAST_PER_STRENGTH: 2.4,
-  BLAST_MAX: 48,
-  BLAST_FALLOFF: 1.5,
+  BLAST_BASE: 16,
+  BLAST_PER_STRENGTH: 3.1,
+  BLAST_MAX: 62,
+  BLAST_FALLOFF: 1.05,
   // How hard the blast throws what it breaks, in metres per second per unit of
   // impact strength, and the ceiling on that. The first version deliberately kept
   // this to a shove so the blocks would read as falling masonry rather than as a
@@ -60,8 +60,8 @@ export const DESTRUCTION = {
   // both what an aircraft's worth of kinetic energy would actually do to them and
   // the thing worth watching. The upward bias is what turns a sideways spray into
   // an arc; the spin is what stops them looking like cards.
-  BLAST_PUSH: 24,
-  BLAST_PUSH_MAX: 84,
+  BLAST_PUSH: 30,
+  BLAST_PUSH_MAX: 115,
   BLAST_LIFT: 0.38,
   BLAST_SPIN: 4.4,
   // Kinetic energy that counts as a full-strength hit, in the game's own units:
@@ -77,13 +77,18 @@ export const DESTRUCTION = {
   // fastest jet in the catalogue is devastating but not unbounded.
   REFERENCE_ENERGY: 1720,
   ENERGY_CEILING: 18,
-  // A module keeps standing while it can still trace a path to the ground. Its own
-  // column counts for most of that; being tied to the slabs beside it counts for the
-  // rest, which is what lets a single missing cell leave a hole instead of shearing
-  // everything above it off.
-  SUPPORT_COLUMN: 0.7,
-  SUPPORT_LATERAL: 0.3,
-  SUPPORT_TOLERANCE: 0.28,
+  // A block keeps standing while it can still trace a path to the ground. That is
+  // the only rule. There used to be a second one - a block also had to keep enough
+  // of its own immediate support - and it meant that punching a hole in a tower
+  // sheared everything above the hole off, because those blocks had lost the column
+  // they were sitting on. Correct statics, and wrong for a game about flying into
+  // buildings: what you want when you hit one is the wall blowing outward, not the
+  // skyline quietly subsiding. A hole is a hole now, and the roof stays where it is
+  // as long as anything at all still reaches the ground.
+  //
+  // What survives is the case no local rule could ever have caught: a slab of
+  // building severed from the earth entirely - a whole storey taken out, or the base
+  // cut away - which has nothing left to stand on and comes down as one.
   // Falling bodies. Gravity is stronger than the real thing because the city is
   // built at arcade scale - at 9.81 a slab takes ten seconds to come down from the
   // roof and the collapse reads as slow motion.
@@ -286,6 +291,12 @@ export class StructuralModule {
     this.restTimer = 0;
     this.age = 0;
     this.breakup = 0;             // accumulated impact speed since it came away
+    // How much of that it can take before it stops being a block. Spread per block
+    // rather than one figure for all of them: identical thresholds sit right on the
+    // speed of a fall from the roof, so a collapse either pulverised everything or
+    // nothing at all depending on which side of it the arithmetic landed. Real
+    // masonry is not uniform and neither is this.
+    this.toughness = DESTRUCTION.BREAKUP_SPEED * (0.5 + Math.random() * 1.1);
   }
 
   get intact() {
@@ -304,43 +315,6 @@ export class StructuralModule {
     const dy = Math.max(Math.abs(point.y - this.centre.y) - this.size.y * 0.5, 0);
     const dz = Math.max(Math.abs(point.z - this.centre.z) - this.size.z * 0.5, 0);
     return Math.sqrt(dx * dx + dy * dy + dz * dz);
-  }
-
-  /** How much of this module's own column is still under it, in [0, 1]. */
-  columnFraction(reachable = null) {
-    if (this.grounded) return 1;
-    if (this.supports.length === 0) return 0;
-    let alive = 0;
-    for (const s of this.supports) {
-      if (s.intact && (reachable === null || reachable.has(s))) alive++;
-    }
-    return alive / this.supports.length;
-  }
-
-  /**
-   * How well this module is still held up, in [0, 1].
-   *
-   * Its own column carries most of the load and the slabs beside it carry the rest -
-   * but only as well as those slabs are themselves held up. That second clause is the
-   * whole propagation rule. Counting a neighbour as support merely for existing makes
-   * every storey above a hole self-supporting, because the storey above is always
-   * intact at the moment you ask; weighting it by the neighbour's own column means a
-   * hole with nothing under either side of it climbs, and a hole with solid ground
-   * under its neighbours does not.
-   */
-  supportFraction(reachable = null) {
-    if (this.grounded) return 1;
-    const column = this.columnFraction(reachable);
-    let lateral = 0;
-    if (this.neighbours.length) {
-      let sum = 0;
-      for (const n of this.neighbours) {
-        if (!n.intact || (reachable !== null && !reachable.has(n))) continue;
-        sum += n.columnFraction(reachable);
-      }
-      lateral = sum / this.neighbours.length;
-    }
-    return column * DESTRUCTION.SUPPORT_COLUMN + lateral * DESTRUCTION.SUPPORT_LATERAL;
   }
 
   applyDamage(amount) {
@@ -727,15 +701,15 @@ export class DestructibleBuilding {
   /**
    * The support pass.
    *
-   * Two rules, run to a fixed point. A module needs to keep enough of its own
-   * support, and it needs to be able to trace a path back to the ground through
-   * modules that are still standing. The first catches an overhang; the second
-   * catches an island - a slab of building left hanging with its whole column shot
-   * out below it, which the local rule alone would happily leave floating.
+   * One rule, run to a fixed point: a block has to be able to trace a path back to
+   * the ground through blocks that are still standing. Anything that cannot is an
+   * island - a slab of building severed from the earth - and it comes down.
    *
    * Running to a fixed point is what makes this propagation rather than a script:
    * each pass removes what the previous pass stopped holding up, and the collapse
-   * ends where the structure happens to be able to take it.
+   * ends where the structure happens to be able to take it. In practice a single
+   * hole never triggers it, because the rest of the plan still reaches the ground
+   * around the hole; cutting a storey through, or taking the base out, does.
    */
   settleStructure(impact = null) {
     // The bound is the height of the building, not a round number. Failure climbs at
@@ -747,10 +721,7 @@ export class DestructibleBuilding {
       const reachable = this._reachableFromGround();
       const doomed = [];
       for (const m of this.modules) {
-        if (!m.intact) continue;
-        if (!reachable.has(m)) { doomed.push(m); continue; }
-        if (m.grounded) continue;
-        if (m.supportFraction(reachable) < DESTRUCTION.SUPPORT_TOLERANCE) doomed.push(m);
+        if (m.intact && !reachable.has(m)) doomed.push(m);
       }
       if (doomed.length === 0) break;
       for (const m of doomed) this._detach(m, impact);
@@ -957,7 +928,7 @@ export class DestructibleBuilding {
           // And the slab itself. Masonry does not survive arriving at speed; past a
           // point it stops being a block and becomes the rubble it throws off.
           m.breakup += hitSpeed;
-          if (m.breakup > DESTRUCTION.BREAKUP_SPEED) {
+          if (m.breakup > m.toughness) {
             this.onEvent?.({ type: 'shatter', module: m, building: this });
             this._retire(m);
             this.falling.splice(i, 1);

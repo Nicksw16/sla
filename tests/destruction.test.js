@@ -110,7 +110,7 @@ function fly(w, {
 function levelTheBase(w, tower = 0) {
   const t = w.towers[tower];
   const y = t.origin.y + (t.height / t.levels) * 0.5;
-  for (const lat of [-0.45, 0, 0.45]) {
+  for (const lat of [-0.6, -0.2, 0.2, 0.6]) {
     for (const face of ['west', 'east', 'north', 'south']) {
       if (!t.standing) return;
       fly(w, { tower, face, y, ...FASTEST, lat, required: false });
@@ -346,17 +346,37 @@ test('TESTE 4 - a frontal hit takes out the columns it struck and nothing else',
   const r = fly(w, { face: 'west', y, ...MIDTIER });
   const broken = t.modules.filter((m) => !m.intact);
   assert.ok(r.broke >= 2, `${r.broke} blocks broken by the blast itself`);
-  assert.ok(broken.length > r.broke, 'and more came away with them');
+  // Everything that came away came away in the blast. Nothing else follows it: the
+  // hit blows a crater, it does not shear the building above the crater off.
+  assert.equal(broken.length, r.broke, 'the blast took exactly what it broke');
   const reach = DESTRUCTION.BLAST_BASE + DESTRUCTION.ENERGY_CEILING * DESTRUCTION.BLAST_PER_STRENGTH;
   for (const m of broken) {
     assert.ok(m.centre.x <= t.origin.x + reach, 'all of it on the side that was hit');
-    assert.ok(m.centre.y > y - reach - t.moduleSize.y,
-      'and nothing below the blast, because nothing below it lost its support');
+    assert.ok(Math.abs(m.centre.y - y) <= reach + t.moduleSize.y,
+      'and all of it within the blast, above and below alike');
   }
   // A mid-tier airframe leaves the far quarter of the plan standing.
   const far = t.modules.filter((m) => m.centre.x > t.origin.x + t.width * 0.25);
   assert.ok(far.length > 0);
   assert.ok(far.every((m) => m.intact), 'the far quarter is untouched');
+});
+
+test('what is above the crater stays up', () => {
+  const w = world();
+  const t = w.towers[0];
+  const y = BASE + H * 0.5;
+  fly(w, { face: 'west', y, ...FASTEST });
+  const cut = t.levelAt(y);
+  const reach = DESTRUCTION.BLAST_MAX / (t.height / t.levels);
+  const wellAbove = t.modules.filter((m) => m.level > cut + reach + 2);
+  assert.ok(wellAbove.length > 0);
+  assert.ok(wellAbove.every((m) => m.intact),
+    `${wellAbove.filter((m) => !m.intact).length} of ${wellAbove.length} blocks above the `
+    + 'crater came down, and none of them should have');
+  assert.equal(t.standing, true);
+  // Including the roof: the cap is still where it was built.
+  const roof = t.props.find((p) => p.supports[0].level === t.levels - 1);
+  assert.equal(roof.fallen, false, 'and the roof is still on it');
 });
 
 test('the fastest jet opens the building right through', () => {
@@ -406,17 +426,13 @@ test('TESTE 6 - the lower storeys are built to take more', () => {
   assert.ok(highBlast > lowBlast,
     `the same blow breaks more of the thinner storeys (${lowBlast} low, ${highBlast} high)`);
 
-  // The other half of it, and the reason this is measured on the blast rather than
-  // on the total: once a blow is hard enough to open a hole at either height, the
-  // hole low down is the one that costs the building, because everything above it
-  // is standing on it.
-  const deepLow = world();
-  const deepHigh = world();
-  fly(deepLow, { y: BASE + H * 0.06, ...TRAINER });
-  fly(deepHigh, { y: BASE + H * 0.75, ...TRAINER });
-  assert.ok(counts(deepLow.towers[0]).gone > counts(deepHigh.towers[0]).gone,
-    `a hole low down costs more of the building (${counts(deepLow.towers[0]).gone} `
-    + `against ${counts(deepHigh.towers[0]).gone})`);
+  // And it is the whole story: what the blast breaks is what the building loses,
+  // wherever the hole is. A hole low down used to cost far more than the same hole
+  // high up, because everything above it was standing on it and sheared away.
+  const low2 = world();
+  fly(low2, { y: BASE + H * 0.06, ...pass });
+  assert.equal(counts(low2.towers[0]).gone, lowBlast,
+    'a hole low down costs the blast and nothing more');
 });
 
 test('TESTE 6 - the other tower is untouched by a hit on the first', () => {
@@ -487,20 +503,19 @@ test('TESTE 9 - a single missing module leaves a hole, not a shear', () => {
   assert.equal(counts(t).gone, 1, 'its neighbours carry it and nothing else moves');
 });
 
-test('TESTE 9 - losing two columns under a corner shears that corner off', () => {
+test('TESTE 9 - taking the ground out from under a corner does not shear it off', () => {
   const w = world();
   const t = w.towers[0];
   const level = 5;
   t._detach(t.at(level, 0, 0), null);
   t._detach(t.at(level, 0, 1), null);
   t.settleStructure(null);
-  const gone = counts(t).gone;
-  // Two columns, from the cut to the roof: the failure climbs because each storey's
-  // neighbours have lost their own support too, which is the whole propagation rule.
-  assert.equal(gone, 2 * (t.levels - level), `${gone} modules came away`);
-  for (const m of t.modules.filter((x) => x.level < level)) {
-    assert.equal(m.intact, true, 'and the structure below is untouched');
-  }
+  // The two blocks above the hole have lost the column they were sitting on and stay
+  // exactly where they are, because the rest of the plan still reaches the ground
+  // around them. This is the rule that used to bring the corner down with them.
+  assert.equal(counts(t).gone, 2, `${counts(t).gone} blocks came away`);
+  assert.equal(t.at(level + 1, 0, 0).intact, true, 'the block over the hole stays up');
+  assert.equal(t.standing, true);
 });
 
 test('TESTE 9 - an untouched tower never loses a module on its own', () => {
@@ -650,8 +665,9 @@ test('a collapse leaves a mound on the footprint and a scatter around it', () =>
   // different question now that the blast throws most of them clear of the footprint
   // altogether, where they all end up on flat ground at the same height.
   const columns = [...t.pile].filter(Number.isFinite).map((v) => v - t.origin.y);
-  assert.ok(columns.length > t.cells * t.cells * 0.4,
-    `rubble over ${columns.length} of ${t.cells * t.cells} columns`);
+  assert.ok(columns.length > t.cells * t.cells * 0.2,
+    `rubble over ${columns.length} of ${t.cells * t.cells} columns - the rest of the `
+    + 'plan is swept clean, because the blast throws most of what it breaks clear of it');
   const mound = Math.max(...columns);
   assert.ok(mound > t.moduleSize.y * 2, `the mound is deeper than a couple of blocks (${mound.toFixed(0)} m)`);
   assert.ok(mound < t.height * 0.55,
@@ -675,11 +691,13 @@ test('wreckage piles on the stump instead of falling through it', () => {
   const t = w.towers[0];
   // Take one module out high up and let the column above it come down. Everything
   // below is untouched, so none of it may end up at street level.
+  // A whole storey taken out, so there really is a mass in the air with nothing but
+  // the stump beneath it.
   const level = 12;
-  for (const m of [t.at(level, 0, 0), t.at(level, 0, 1)]) t._detach(m, null);
+  for (const m of t.levelModules(level)) t._detach(m, null);
   t.settleStructure(null);
   const dropped = t.falling.slice();
-  assert.ok(dropped.length >= 4);
+  assert.ok(dropped.length >= 4, `${dropped.length} blocks in the air`);
   settle(w);
   const stumpTop = t.origin.y + level * (t.height / t.levels);
   for (const m of dropped) {
