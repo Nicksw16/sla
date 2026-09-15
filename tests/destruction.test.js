@@ -354,12 +354,25 @@ test('TESTE 6 - the lower storeys are built to take more', () => {
   // total is bigger low down for a reason that has nothing to do with strength:
   // there is far more building above a hole at the sixth percentile than above one
   // at the seventy-fifth, and all of it shears away.
-  const lowBlast = fly(low, { y: BASE + H * 0.06, ...TRAINER }).broke;
-  const highBlast = fly(high, { y: BASE + H * 0.75, ...TRAINER }).broke;
+  // Just under full throttle, where the gradient bites: flat out the trainer is over
+  // the strength of both ends and breaks the same handful either way.
+  const pass = throttled(TRAINER, 0.8);
+  const lowBlast = fly(low, { y: BASE + H * 0.06, ...pass }).broke;
+  const highBlast = fly(high, { y: BASE + H * 0.75, ...pass }).broke;
   assert.ok(highBlast > lowBlast,
     `the same blow breaks more of the thinner storeys (${lowBlast} low, ${highBlast} high)`);
-  assert.ok(counts(low.towers[0]).gone > counts(high.towers[0]).gone,
-    'while a hole low down costs the building more, because more of it is standing on the hole');
+
+  // The other half of it, and the reason this is measured on the blast rather than
+  // on the total: once a blow is hard enough to open a hole at either height, the
+  // hole low down is the one that costs the building, because everything above it
+  // is standing on it.
+  const deepLow = world();
+  const deepHigh = world();
+  fly(deepLow, { y: BASE + H * 0.06, ...TRAINER });
+  fly(deepHigh, { y: BASE + H * 0.75, ...TRAINER });
+  assert.ok(counts(deepLow.towers[0]).gone > counts(deepHigh.towers[0]).gone,
+    `a hole low down costs more of the building (${counts(deepLow.towers[0]).gone} `
+    + `against ${counts(deepHigh.towers[0]).gone})`);
 });
 
 test('TESTE 6 - the other tower is untouched by a hit on the first', () => {
@@ -580,28 +593,36 @@ test('what a falling block does to the floor scales with how far it fell', () =>
   assert.equal(longFall.intact, false, 'and goes straight through it');
 });
 
-test('the wreckage piles up instead of ending at one height', () => {
+test('a collapse leaves a mound on the footprint and a scatter around it', () => {
   const w = world();
   const t = w.towers[0];
   levelTheBase(w, 0);
   settle(w);
-  const resting = t.modules
-    .filter((m) => m.state === MODULE_STATE.SETTLED)
-    .map((m) => m.centre.y - t.origin.y);
-  assert.ok(resting.length > 8, `${resting.length} slabs came to rest`);
-  const spread = Math.max(...resting) - Math.min(...resting);
-  assert.ok(spread > t.moduleSize.y,
-    `the pile is deeper than a single slab (${spread.toFixed(0)} m across `
-    + `${resting.length} slabs ${t.moduleSize.y.toFixed(0)} m thick)`);
-  // And it is a mound, not the building stacked back up where it stood.
-  const mound = Math.max(...resting);
+  const resting = t.modules.filter((m) => m.state === MODULE_STATE.SETTLED);
+  assert.ok(resting.length > 50, `${resting.length} blocks came to rest`);
+
+  // The mound, measured where it is actually kept: how high the wreckage stands in
+  // each column of the plan. Counting every resting block instead would answer a
+  // different question now that the blast throws most of them clear of the footprint
+  // altogether, where they all end up on flat ground at the same height.
+  const columns = [...t.pile].filter(Number.isFinite).map((v) => v - t.origin.y);
+  assert.ok(columns.length > t.cells * t.cells * 0.4,
+    `rubble over ${columns.length} of ${t.cells * t.cells} columns`);
+  const mound = Math.max(...columns);
+  assert.ok(mound > t.moduleSize.y * 2, `the mound is deeper than a couple of blocks (${mound.toFixed(0)} m)`);
   assert.ok(mound < t.height * 0.55,
-    `the rubble is ${mound.toFixed(0)} m of a ${t.height} m building`);
+    `and it is a mound, not the building stacked back up (${mound.toFixed(0)} m of ${t.height} m)`);
+
+  const thrown = Math.max(...resting.map(
+    (m) => Math.hypot(m.centre.x - t.origin.x, m.centre.z - t.origin.z)));
+  assert.ok(thrown > t.width, `and some of it went well clear (${thrown.toFixed(0)} m out)`);
+
   const pulverised = t.modules.filter((m) => m.state === MODULE_STATE.DESTROYED).length;
   assert.ok(pulverised > t.modules.length * 0.4,
-    `most of it broke up rather than surviving as slabs (${pulverised}/${t.modules.length})`);
-  console.log(`       rubble mound ${mound.toFixed(0)} m of ${t.height} m · `
-    + `${pulverised} of ${t.modules.length} blocks pulverised`);
+    `most of it broke up rather than surviving as blocks (${pulverised}/${t.modules.length})`);
+  console.log(`       mound ${mound.toFixed(0)} m of ${t.height} m over ${columns.length}/`
+    + `${t.cells * t.cells} columns · ${pulverised} of ${t.modules.length} pulverised · `
+    + `scattered ${thrown.toFixed(0)} m`);
 });
 
 test('wreckage piles on the stump instead of falling through it', () => {

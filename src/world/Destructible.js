@@ -52,6 +52,18 @@ export const DESTRUCTION = {
   BLAST_PER_STRENGTH: 2.4,
   BLAST_MAX: 48,
   BLAST_FALLOFF: 1.5,
+  // How hard the blast throws what it breaks, in metres per second per unit of
+  // impact strength, and the ceiling on that. The first version deliberately kept
+  // this to a shove so the blocks would read as falling masonry rather than as a
+  // firework - but at block sizes this small, a shove reads as the facade quietly
+  // sliding off. Thrown properly they come out of the wound in a spray, which is
+  // both what an aircraft's worth of kinetic energy would actually do to them and
+  // the thing worth watching. The upward bias is what turns a sideways spray into
+  // an arc; the spin is what stops them looking like cards.
+  BLAST_PUSH: 15,
+  BLAST_PUSH_MAX: 52,
+  BLAST_LIFT: 0.3,
+  BLAST_SPIN: 3.2,
   // Kinetic energy that counts as a full-strength hit, in the game's own units:
   // aircraft mass is a 0.55-1.4 factor and speed is metres per second.
   //
@@ -94,7 +106,14 @@ export const DESTRUCTION = {
   PANCAKE_MAX: 3,
   // Masonry does not survive arriving at terminal velocity. Accumulated impact speed
   // past this and the block stops being a block and becomes the rubble it throws off.
-  BREAKUP_SPEED: 38,
+  //
+  // Retuned when the blast started throwing blocks properly: at the old figure a
+  // collapse pulverised everything and swept the footprint clean, because the blocks
+  // that were not flung clear all fell far enough to shatter, and the tower left no
+  // mound at all. Measured on the shipped towers, this leaves a mound a quarter of
+  // the building's height on most of its columns, three quarters of it pulverised,
+  // and wreckage scattered a couple of hundred metres into the surrounding streets.
+  BREAKUP_SPEED: 80,
   // Slabs land skewed and interlock, so a stack of them is shorter than the sum of
   // their thicknesses. Measured against the shipped towers: at these two numbers a
   // full collapse pulverises about five sixths of the building and leaves a mound
@@ -102,7 +121,7 @@ export const DESTRUCTION = {
   // a four-hundred-metre tower piled back up to four hundred metres.
   PILE_COMPACTION: 0.4,
   // Budgets. These ceilings are what keep a collapse off the frame budget.
-  MAX_PHYSICAL_MODULES: 1100,
+  MAX_PHYSICAL_MODULES: 1750,
   // How many detachments in one batch are worth an effect. A tower shearing in half
   // is one event to the player, not eighty, and eighty would empty the particle pool
   // on the first frame of it.
@@ -425,6 +444,9 @@ export class DestructibleBuilding {
     // slab in a collapse falls to the same height and the tower reads as melting
     // into the ground instead of piling up on it.
     this.pile = new Float32Array(cells * cells).fill(-Infinity);
+    // The highest level still standing in each column, so the search for what is
+    // under a falling body starts at the structure rather than at the sky.
+    this.columnTop = new Int16Array(cells * cells).fill(levels - 1);
     this.onEvent = null;
 
     const levelHeight = height / levels;
@@ -446,9 +468,11 @@ export class DestructibleBuilding {
       origin: new THREE.Vector3(origin.x, origin.y + height * 0.5, origin.z),
       extent: Math.hypot(Math.hypot(width, depth) * 0.5, height * 0.5),
     });
-    // How far a slab can get from the middle of the building before it lands: the
-    // whole height, plus a generous allowance for being thrown sideways.
-    this.fallReach = this.shell.tightRadius + height * 0.75;
+    // How far a block can get from the middle of the building before it lands: the
+    // whole height, plus an allowance for being thrown sideways. It has to cover the
+    // throw, or the culling sphere clips the spray and blocks wink out mid-flight.
+    this.fallReach = this.shell.tightRadius + height * 1.2
+      + DESTRUCTION.BLAST_PUSH_MAX * 4;
 
     const centre = new THREE.Vector3();
     for (let level = 0; level < levels; level++) {
@@ -526,18 +550,42 @@ export class DestructibleBuilding {
     return m ? m.centre.y + m.size.y * 0.5 : -Infinity;
   }
 
-  /** The module still standing directly under a point, or null. */
+  /**
+   * The module still standing directly under a point, or null.
+   *
+   * Every falling body asks this every frame, so the scan starts at the highest
+   * level in that column still standing rather than at the body's own level. During
+   * a collapse almost every body is somewhere above the stump, and without that the
+   * scan walks the entire height of the building for each of them - which, at a
+   * couple of thousand bodies and thirty-four storeys, is the whole cost of the
+   * integrator.
+   */
   moduleUnder(x, z, y) {
     const cell = this.cellAt(x, z);
     if (cell < 0) return null;
+    const top = this.columnTop[cell];
+    if (top < 0) return null;
     const cx = cell % this.cells;
     const cz = (cell / this.cells) | 0;
-    const start = Math.min(this.levels - 1, this.levelAt(y));
+    const start = Math.min(top, this.levelAt(y));
     for (let level = start; level >= 0; level--) {
       const m = this.at(level, cx, cz);
       if (m && m.intact) return m;
     }
     return null;
+  }
+
+  /** Recomputes the highest level still standing in one column. */
+  _lowerColumnTop(cell) {
+    const cx = cell % this.cells;
+    const cz = (cell / this.cells) | 0;
+    let top = this.columnTop[cell];
+    while (top >= 0) {
+      const m = this.at(top, cx, cz);
+      if (m && m.intact) break;
+      top--;
+    }
+    this.columnTop[cell] = top;
   }
 
   /** How high the rubble already stands in the column over a point. */
@@ -705,24 +753,32 @@ export class DestructibleBuilding {
     m.state = MODULE_STATE.DETACHED;
     m.damage = Math.max(m.damage, m.strength);
     if (m.colliderIndex >= 0) this.grid.remove(m.colliderIndex);
+    if (m.level === this.columnTop[m.cell]) this._lowerColumnTop(m.cell);
 
-    // An initial push away from the impact, plus enough spin to look like masonry
-    // rather than a lift. Gravity takes over almost immediately - this is a shove,
-    // not an explosion, and a module that comes away because its support went gets
-    // no shove at all.
+    // Thrown out of the wound, hardest at the centre of it and falling away with
+    // distance, plus a lift so the spray arcs and a hard tumble so the blocks read
+    // as masonry rather than as cards. A block that comes away later because its
+    // support went gets none of this - it just falls, which is the difference
+    // between the explosion and the collapse that follows it.
+    let thrown = 0;
     if (impact) {
       const away = _v1.copy(m.centre).sub(impact.position);
       const dist = Math.max(1, away.length());
       away.normalize();
-      const push = clamp(impact.strength * 7, 0, 18) * clamp(30 / dist, 0.1, 1);
-      m.velocity.copy(away).multiplyScalar(push * 0.6);
-      m.velocity.addScaledVector(impact.direction ?? away, push * 0.35);
+      thrown = clamp(impact.strength * DESTRUCTION.BLAST_PUSH, 0, DESTRUCTION.BLAST_PUSH_MAX)
+        * clamp(30 / dist, 0.12, 1);
+      m.velocity.copy(away).multiplyScalar(thrown * 0.75);
+      m.velocity.addScaledVector(impact.direction ?? away, thrown * 0.3);
+      m.velocity.y += thrown * DESTRUCTION.BLAST_LIFT;
     }
     m.velocity.y -= 1.2;
+    // Spin scales with the throw: what is flung tumbles, what merely drops turns over
+    // slowly, and one number does both.
+    const tumble = 0.7 + thrown * 0.055;
     m.spin.set(
-      (Math.random() - 0.5) * 0.9,
-      (Math.random() - 0.5) * 0.6,
-      (Math.random() - 0.5) * 0.9,
+      (Math.random() - 0.5) * DESTRUCTION.BLAST_SPIN * tumble,
+      (Math.random() - 0.5) * DESTRUCTION.BLAST_SPIN * 0.7 * tumble,
+      (Math.random() - 0.5) * DESTRUCTION.BLAST_SPIN * tumble,
     );
 
     if (this.falling.length < DESTRUCTION.MAX_PHYSICAL_MODULES) {
@@ -954,6 +1010,7 @@ export class DestructibleBuilding {
     this.collapsed = false;
     this.damaged = false;
     this.pile.fill(-Infinity);
+    this.columnTop.fill(this.levels - 1);
     this.shell.setReach(this.shell.tightRadius);
   }
 }
@@ -1076,7 +1133,9 @@ export class DestructionField {
       this.stats.detached++;
       if (this._effects++ >= DESTRUCTION.MAX_EFFECTS_PER_BATCH) return;
       const m = e.module;
-      this.debris?.burst(m.centre, m.size, 8, 9);
+      // Chunks leave with the block, not at a fixed speed: a block flung out of the
+      // wound sheds its rubble into the same spray.
+      this.debris?.burst(m.centre, m.size, 10, 9 + m.velocity.length() * 0.55);
       this.bus?.emit('structure:detach', {
         building: e.building.name,
         point: m.centre.clone(),
