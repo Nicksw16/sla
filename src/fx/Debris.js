@@ -154,6 +154,9 @@ export class DebrisField {
       }
 
       if (this.rest[i] < DEBRIS.SETTLED_LIFETIME) {
+        // The underside before this step, so a roof does not stop counting on the
+        // exact frame the chunk arrives at it. Same reason as the modules.
+        const wasAbove = this.position[i3 + 1] - this.scale[i3 + 1] * 0.5;
         this.velocity[i3 + 1] += DEBRIS.GRAVITY * dt;
         const drag = 1 - DEBRIS.DRAG * dt;
         this.velocity[i3] *= drag;
@@ -164,7 +167,7 @@ export class DebrisField {
         this.position[i3 + 2] += this.velocity[i3 + 2] * dt;
 
         const floor = (groundAt
-          ? groundAt(this.position[i3], this.position[i3 + 2])
+          ? groundAt(this.position[i3], this.position[i3 + 2], wasAbove)
           : 0) + this.scale[i3 + 1] * 0.5;
         if (this.position[i3 + 1] <= floor) {
           this.position[i3 + 1] = floor;

@@ -306,6 +306,9 @@ export class AudioManager {
       bus.on('turbo:empty', () => this.blip(190, 0.2, 'sawtooth')),
       bus.on('score:combo', (e) => { if (e.broken) this.blip(160, 0.16, 'sawtooth'); }),
       bus.on('weather:lightning', (e) => this.thunder(e.distance)),
+      bus.on('structure:detach', () => this.rubble(0.35)),
+      bus.on('structure:landed', (e) => this.rubble(clamp01((e.speed ?? 20) / 60))),
+      bus.on('structure:collapse', () => this.collapse()),
       bus.on('mission:complete', () => this.fanfare(true)),
       bus.on('mission:failed', () => this.fanfare(false)),
       bus.on('mission:countdown', () => {}),
@@ -505,6 +508,59 @@ export class AudioManager {
     if (!this.ready) return;
     this.impact(lerp(0.32, 0.08, clamp01(quality)));
     this.blip(300, 0.1, 'sine', 0.1);
+  }
+
+  /**
+   * Masonry arriving in the street.
+   *
+   * Filtered noise with a fast attack and a short tail - the same shape as thunder,
+   * but close, dry and gritty rather than distant and soft. Without it a tower comes
+   * apart in silence, and silence is what makes a collapse read as an animation
+   * playing rather than as several hundred tonnes of building hitting the ground.
+   */
+  rubble(force = 0.5) {
+    if (!this.ready) return;
+    const f = clamp01(force);
+    // Rate limited on its own clock: a collapse lands slabs faster than the ear can
+    // separate them, and stacking a dozen of these just clips the bus.
+    const now = this.ctx.currentTime;
+    if (now - (this._lastRubble ?? -1) < 0.09) return;
+    this._lastRubble = now;
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.noiseBuffer;
+    src.playbackRate.value = lerp(0.85, 0.45, f);
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = lerp(900, 320, f);
+    filter.Q.value = 0.8;
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0, now);
+    g.gain.linearRampToValueAtTime(lerp(0.12, 0.42, f), now + 0.015);
+    g.gain.exponentialRampToValueAtTime(0.001, now + lerp(0.45, 1.1, f));
+    src.connect(filter); filter.connect(g); g.connect(this.sfxBus);
+    src.start(now, Math.random() * 0.5, 1.2);
+  }
+
+  /** The whole building going. Long, low, and only once per tower. */
+  collapse() {
+    if (!this.ready) return;
+    const t = this.ctx.currentTime;
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.noiseBuffer;
+    src.loop = true;
+    src.playbackRate.value = 0.3;
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(700, t);
+    filter.frequency.exponentialRampToValueAtTime(110, t + 3.4);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(0.5, t + 0.25);
+    g.gain.setValueAtTime(0.5, t + 1.6);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 4.2);
+    src.connect(filter); filter.connect(g); g.connect(this.sfxBus);
+    src.start(t);
+    src.stop(t + 4.3);
   }
 
   thunder(distance = 1200) {

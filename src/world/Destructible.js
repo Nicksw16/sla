@@ -45,12 +45,18 @@ export const DESTRUCTION = {
   BLAST_RADIUS: 1.3,
   BLAST_FALLOFF: 1.5,
   // Kinetic energy that counts as a full-strength hit, in the game's own units:
-  // aircraft mass is a 0.55-1.4 factor and speed is metres per second, so this is
-  // about what a one-tonne-class airframe carries at 160 m/s. Above the ceiling the
-  // curve flattens, so the fastest aircraft in the catalogue cannot vaporise a tower
-  // with one touch.
-  REFERENCE_ENERGY: 12500,
-  ENERGY_CEILING: 2.5,
+  // aircraft mass is a 0.55-1.4 factor and speed is metres per second.
+  //
+  // Calibrated against the catalogue rather than picked: the number is what the
+  // slowest, lightest trainer in the game carries flat out, so flying *anything*
+  // into a tower at its own top speed breaks the module it hit. That is the whole
+  // point of the feature, and the first version of this got it wrong - it was set
+  // for a heavy airframe at 160 m/s, which meant the aircraft the player actually
+  // starts with delivered an eighth of what one module could take and a direct hit
+  // left nothing but a scuff. The ceiling is where the curve flattens, so the
+  // fastest jet in the catalogue is devastating but not unbounded.
+  REFERENCE_ENERGY: 1720,
+  ENERGY_CEILING: 18,
   // A module keeps standing while it can still trace a path to the ground. Its own
   // column counts for most of that; being tied to the slabs beside it counts for the
   // rest, which is what lets a single missing cell leave a hole instead of shearing
@@ -684,7 +690,7 @@ export class DestructibleBuilding {
       }
 
       if (!simulate) {
-        m.centre.y = groundAt(m.centre.x, m.centre.z) + m.size.y * 0.5;
+        m.centre.y = groundAt(m.centre.x, m.centre.z, m.centre.y) + m.size.y * 0.5;
         m.state = MODULE_STATE.SETTLED;
         m.velocity.set(0, 0, 0);
         m.spin.set(0, 0, 0);
@@ -693,16 +699,23 @@ export class DestructibleBuilding {
         continue;
       }
 
+      // Where the underside was before this step. It, not the position after the
+      // step, is what decides which surfaces count as "below": a roof the body was
+      // above a moment ago is exactly the roof it is now landing on, and asking
+      // after the step means the roof stops counting on the very frame the body
+      // reaches it and the body drops straight through.
+      const wasAbove = m.centre.y - m.size.y * 0.5;
       m.velocity.y += g * dt;
       m.velocity.multiplyScalar(1 - DESTRUCTION.AIR_DRAG * dt);
       m.centre.addScaledVector(m.velocity, dt);
 
       // Contact. The floor is whichever is higher: the structure still standing
-      // under this point, or the terrain - so a slab that slides off the plaza lands
-      // on the street rather than at sea level, and one that drops straight down
-      // piles onto the stump rather than falling through it.
+      // under this point, the nearest roof beneath it, or the terrain - so a slab
+      // that slides off the plaza lands on the street rather than at sea level, one
+      // that drops straight down piles onto the stump rather than falling through
+      // it, and one thrown clear comes to rest on the neighbours' roofs.
       const floor = Math.max(
-        groundAt(m.centre.x, m.centre.z),
+        groundAt(m.centre.x, m.centre.z, wasAbove),
         this.supportTopBelow(m.centre.x, m.centre.z, m.centre.y),
       ) + m.size.y * 0.5;
       if (m.centre.y <= floor) {
@@ -747,17 +760,18 @@ export class DestructibleBuilding {
     p.age += dt;
     const o = p.object;
     if (!simulate) {
-      o.position.y = groundAt(o.position.x, o.position.z);
+      o.position.y = groundAt(o.position.x, o.position.z, o.position.y);
       p.state = MODULE_STATE.SETTLED;
       return;
     }
+    const wasAbove = o.position.y;
     p.velocity.y += DESTRUCTION.GRAVITY * dt;
     p.velocity.multiplyScalar(1 - DESTRUCTION.AIR_DRAG * dt);
     o.position.addScaledVector(p.velocity, dt);
     _e1.set(p.spin.x * dt, p.spin.y * dt, p.spin.z * dt);
     o.quaternion.multiply(_q1.setFromEuler(_e1));
     const floor = Math.max(
-      groundAt(o.position.x, o.position.z),
+      groundAt(o.position.x, o.position.z, wasAbove),
       this.supportTopBelow(o.position.x, o.position.z, o.position.y),
     );
     if (o.position.y <= floor) {
@@ -918,6 +932,15 @@ export class DestructionField {
       this.bus?.emit('structure:detach', {
         building: e.building.name,
         point: m.centre.clone(),
+        // Where to look from outside. Anything framing this wants the building, not
+        // the module: the collapse happens over four hundred metres, and the slab
+        // that came away is the least of it.
+        focus: new THREE.Vector3(
+          e.building.origin.x,
+          e.building.origin.y + e.building.height * 0.45,
+          e.building.origin.z,
+        ),
+        span: Math.max(e.building.width, e.building.height),
         size: Math.max(m.size.x, m.size.z),
       });
     } else if (e.type === 'prop') {

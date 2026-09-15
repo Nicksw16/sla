@@ -14,6 +14,7 @@ import { DESTRUCTION, DestructionField, MODULE_STATE, makeImpact } from '../src/
 import { DebrisField } from '../src/fx/Debris.js';
 import { EventBus } from '../src/core/EventBus.js';
 import { LANDMARKS } from '../src/data/regions.js';
+import { AIRCRAFT, AIRCRAFT_ORDER } from '../src/data/aircraft.js';
 import { terrainHeight } from '../src/world/Terrain.js';
 
 let passed = 0;
@@ -27,6 +28,16 @@ function test(name, fn) {
     process.exitCode = 1;
   }
 }
+
+// The aircraft the tests fly, taken from the catalogue rather than invented: the
+// slowest thing the player can own, something from the middle, and the fastest. What
+// is being checked is that the shipped aircraft do the right thing to the shipped
+// towers - a test against made-up numbers would have gone on passing while flying the
+// starter into a tower did nothing at all, which is exactly what happened.
+const TRAINER = { speed: AIRCRAFT.skylark.maxSpeed, mass: AIRCRAFT.skylark.mass };
+const MIDTIER = { speed: AIRCRAFT.talon.maxSpeed, mass: AIRCRAFT.talon.mass };
+const FASTEST = { speed: AIRCRAFT.aurora.maxSpeed, mass: AIRCRAFT.aurora.mass };
+const throttled = (craft, frac) => ({ speed: craft.speed * frac, mass: craft.mass });
 
 const TWINS = LANDMARKS.find((l) => l.type === 'twins');
 const H = TWINS.height;
@@ -88,7 +99,7 @@ function levelTheBase(w, tower = 0) {
   for (const lat of [-0.45, 0, 0.45]) {
     for (const face of ['west', 'east', 'north', 'south']) {
       if (!t.standing) return;
-      fly(w, { tower, face, y, speed: 262, mass: 1.4, lat, required: false });
+      fly(w, { tower, face, y, ...FASTEST, lat, required: false });
     }
   }
 }
@@ -176,12 +187,45 @@ test('the modules are drawn as instances of one mesh, so a tower is one draw cal
 test('TESTE 1 - a slow impact marks the facade and brings nothing down', () => {
   const w = world();
   const t = w.towers[0];
-  fly(w, { speed: 55, mass: 0.7 });
+  fly(w, { ...throttled(TRAINER, 0.4) });
   const n = counts(t);
   assert.equal(n.gone, 0, 'nothing comes away');
   assert.ok(n.damaged > 0, 'but the structure is marked');
   assert.ok(t.integrity < 1 && t.integrity > 0.97, `integrity ${t.integrity}`);
   assert.equal(t.standing, true);
+});
+
+test('every aircraft in the game breaks the tower it flies into', () => {
+  // The one that matters. The first calibration of this system was set for an
+  // airframe heavier and faster than anything the player owns, so the aircraft you
+  // actually start the game in delivered an eighth of what a single module can take:
+  // you flew into a four-hundred-metre tower at full throttle and it scuffed. Every
+  // test in this file passed. This is the one that would not have.
+  const report = [];
+  for (const id of AIRCRAFT_ORDER) {
+    const a = AIRCRAFT[id];
+    const w = world();
+    const t = w.towers[0];
+    const r = fly(w, { y: BASE + H * 0.5, speed: a.maxSpeed, mass: a.mass });
+    const gone = counts(t).gone;
+    report.push(`${a.name} ${gone}`);
+    assert.ok(r.broke >= 1,
+      `${a.name} at ${a.maxSpeed} m/s broke nothing (${report.join(', ')})`);
+    assert.ok(gone >= 1, `${a.name} left nothing missing`);
+    assert.equal(t.standing, true, `${a.name} should not fell a tower in one pass`);
+  }
+  console.log(`       modules lost to one flat-out pass: ${report.join(' · ')}`);
+});
+
+test('the same aircraft flown gently only scars it', () => {
+  for (const id of AIRCRAFT_ORDER) {
+    const a = AIRCRAFT[id];
+    const w = world();
+    const t = w.towers[0];
+    // A third of top speed is a cruise, not a strike.
+    fly(w, { y: BASE + H * 0.5, speed: a.maxSpeed / 3, mass: a.mass });
+    assert.ok(t.integrity < 1, `${a.name} left no mark at all`);
+  }
 });
 
 test('a module that is hit but not broken is visibly scarred', () => {
@@ -193,7 +237,7 @@ test('a module that is hit but not broken is visibly scarred', () => {
   for (let i = 0; i < t.modules.length * 3; i++) {
     assert.equal(colours.array[i], 1, 'an intact tower is untinted everywhere');
   }
-  fly(w, { speed: 120, mass: 1 });
+  fly(w, { ...throttled(TRAINER, 0.7) });
   const marked = t.modules.filter((m) => m.intact && m.damage > 0);
   assert.ok(marked.length > 0);
   for (const m of marked) {
@@ -205,7 +249,7 @@ test('a module that is hit but not broken is visibly scarred', () => {
 test('TESTE 2 - a moderate impact damages without punching through', () => {
   const w = world();
   const t = w.towers[0];
-  fly(w, { speed: 120, mass: 1 });
+  fly(w, { ...throttled(TRAINER, 0.7) });
   const n = counts(t);
   assert.ok(n.damaged >= 2, `${n.damaged} modules damaged`);
   assert.ok(t.integrity < 0.99, 'measurably weaker');
@@ -215,7 +259,7 @@ test('TESTE 2 - a moderate impact damages without punching through', () => {
 test('TESTE 3 - a fast impact punches a hole through the facade', () => {
   const w = world();
   const t = w.towers[0];
-  const r = fly(w, { speed: 250, mass: 1.4 });
+  const r = fly(w, { ...MIDTIER });
   assert.ok(r.broke >= 1, `${r.broke} modules broken outright`);
   const n = counts(t);
   assert.ok(n.gone >= 1, 'there is a hole');
@@ -239,37 +283,37 @@ test('TESTE 4 - a frontal hit takes out the columns it struck and nothing else',
   const w = world();
   const t = w.towers[0];
   const y = BASE + H * 0.5;
-  const r = fly(w, { face: 'west', y, speed: 250, mass: 1.4 });
+  const r = fly(w, { face: 'west', y, ...FASTEST });
   const broken = t.modules.filter((m) => !m.intact);
   assert.ok(r.broke >= 2, `${r.broke} modules broken by the blast itself`);
   assert.ok(broken.length > r.broke, 'and more came away with them');
   for (const m of broken) {
-    assert.ok(m.centre.x < t.origin.x, 'all of it on the side that was hit');
+    assert.ok(m.centre.x <= t.origin.x + 0.01, 'all of it on the side that was hit');
     assert.ok(m.centre.y > y - t.moduleSize.y * 2,
       'and nothing below the hit, because nothing below it lost its support');
   }
-  // The far half of the plan never hears about it.
+  // The far column never hears about it - not even from the fastest jet in the game.
   const far = t.modules.filter((m) => m.centre.x > t.origin.x + t.moduleSize.x * 0.5);
   assert.ok(far.length > 0);
-  assert.ok(far.every((m) => m.intact && m.integrity > 0.9), 'the far side is untouched');
+  assert.ok(far.every((m) => m.intact && m.integrity > 0.5), 'the far column stands');
 });
 
 test('TESTE 5 - a lateral hit damages the face it came in through', () => {
   const w = world();
   const t = w.towers[0];
-  fly(w, { face: 'north', speed: 250, mass: 1.4 });
+  fly(w, { face: 'north', ...FASTEST });
   const broken = t.modules.filter((m) => !m.intact);
   assert.ok(broken.length > 0);
-  assert.ok(broken.every((m) => m.centre.z < t.origin.z), 'the struck face gave way');
+  assert.ok(broken.every((m) => m.centre.z <= t.origin.z + 0.01), 'the struck face gave way');
   const far = t.modules.filter((m) => m.centre.z > t.origin.z + t.moduleSize.z * 0.5);
-  assert.ok(far.every((m) => m.intact && m.integrity > 0.9), 'the opposite face is not');
+  assert.ok(far.every((m) => m.intact && m.integrity > 0.5), 'the opposite face stands');
 });
 
 test('TESTE 6 - the same hit is survivable low down and not high up', () => {
   const low = world();
   const high = world();
-  fly(low, { y: BASE + H * 0.06, speed: 190, mass: 1 });
-  fly(high, { y: BASE + H * 0.75, speed: 190, mass: 1 });
+  fly(low, { y: BASE + H * 0.06, ...TRAINER });
+  fly(high, { y: BASE + H * 0.75, ...TRAINER });
   const lowLost = counts(low.towers[0]).gone;
   const highLost = counts(high.towers[0]).gone;
   assert.equal(lowLost, 0, 'the thick storeys at the bottom shrug it off');
@@ -288,19 +332,19 @@ test('TESTE 6 - the other tower is untouched by a hit on the first', () => {
 test('TESTE 7 - damage accumulates until the facade finally gives way', () => {
   const w = world();
   const t = w.towers[0];
-  // The slowest, lightest aircraft in the catalogue. One pass does almost nothing;
-  // the point is that the almost-nothing is kept.
+  // The trainer at half throttle: one pass does almost nothing, and the point is that
+  // the almost-nothing is kept.
   const seen = [];
   let brokeOn = 0;
   for (let i = 1; i <= 10 && !brokeOn; i++) {
-    const r = fly(w, { y: BASE + H * 0.5, speed: 94, mass: 0.55 });
+    const r = fly(w, { y: BASE + H * 0.5, ...throttled(TRAINER, 0.5) });
     seen.push(+t.integrity.toFixed(4));
     if (counts(t).gone > 0) brokeOn = i;
   }
   for (let i = 1; i < seen.length; i++) {
     assert.ok(seen[i] < seen[i - 1], `pass ${i + 1} did further damage (${seen.join(' > ')})`);
   }
-  assert.ok(brokeOn >= 3, `a trainer needs several passes to get through (${brokeOn})`);
+  assert.ok(brokeOn >= 3, `a half-throttle pass needs repeating (${brokeOn})`);
   assert.ok(brokeOn <= 10, 'but it does get through in the end');
 });
 
@@ -441,6 +485,44 @@ test('wreckage piles on the stump instead of falling through it', () => {
   }
 });
 
+test('the collision grid is a floor as well as a wall', () => {
+  // What a falling slab lands on. The grid is asked for the highest surface *under*
+  // the body, so a slab shed at storey twelve comes to rest on the first roof it
+  // meets rather than dropping through every building between it and the street.
+  const grid = new ObstacleGrid();
+  grid.add(-10, 10, -10, 10, 0, 100, 'building');     // a tall one
+  grid.add(-10, 10, -10, 10, 0, 40, 'building');      // a short one at the same spot
+  assert.equal(grid.surfaceBelow(0, 0, Infinity), 100, 'the roof of the tall one');
+  assert.equal(grid.surfaceBelow(0, 0, 90), 40, 'from below its roof, the short one');
+  assert.equal(grid.surfaceBelow(0, 0, 20), -Infinity, 'from below both, nothing');
+  assert.equal(grid.surfaceBelow(500, 500, Infinity), -Infinity, 'open ground');
+  grid.remove(0);
+  assert.equal(grid.surfaceBelow(0, 0, Infinity), 40, 'a demolished roof stops holding');
+});
+
+test('a falling slab comes to rest on the roof under it', () => {
+  const w = world();
+  const t = w.towers[0];
+  const m = t.at(12, 0, 0);
+  t._detach(m, null);
+  m.velocity.set(-45, 14, -45);                       // thrown clear of the tower
+  // A neighbouring roof at 120 m, standing everywhere the tower does not.
+  const roofY = t.origin.y + 120;
+  const overTower = (x, z) => Math.abs(x - t.origin.x) < t.width * 0.5
+    && Math.abs(z - t.origin.z) < t.depth * 0.5;
+  const ground = (x, z, ceiling = Infinity) => Math.max(
+    GROUND(x, z),
+    !overTower(x, z) && roofY <= ceiling ? roofY : -Infinity,
+  );
+  for (let i = 0; i < 60 * 30 && m.state !== MODULE_STATE.SETTLED; i++) {
+    t.update(1 / 60, ground, null, true);
+  }
+  assert.equal(m.state, MODULE_STATE.SETTLED);
+  const floor = ground(m.centre.x, m.centre.z) + m.size.y * 0.5;
+  assert.ok(Math.abs(m.centre.y - floor) < 0.5,
+    `rested at ${m.centre.y.toFixed(1)}, surface under it ${floor.toFixed(1)}`);
+});
+
 test('a slab that misses the building entirely lands in the street', () => {
   const w = world();
   const t = w.towers[0];
@@ -457,7 +539,7 @@ test('a slab that misses the building entirely lands in the street', () => {
 test('a settled pile is eventually cleared away', () => {
   const w = world();
   const t = w.towers[0];
-  fly(w, { speed: 262, mass: 1.4 });
+  fly(w, { ...FASTEST });
   const dropped = t.falling.length;
   assert.ok(dropped > 0);
   settle(w, DESTRUCTION.SETTLED_LIFETIME + 25);
@@ -467,7 +549,7 @@ test('a settled pile is eventually cleared away', () => {
 test('nothing is simulated when the player is too far away to see it', () => {
   const w = world();
   const t = w.towers[0];
-  fly(w, { speed: 262, mass: 1.4 });
+  fly(w, { ...FASTEST });
   const far = new THREE.Vector3(
     TWINS.x + DESTRUCTION.PHYSICS_ACTIVATION_DISTANCE + 500, 400, TWINS.z);
   w.field.update(1 / 60, far, GROUND);
@@ -498,7 +580,7 @@ test('TESTE 11 - breaking a module throws debris, within its own budget', () => 
   const w = { grid, field, towers: landmarks.userData.destructibles };
 
   assert.equal(debris.liveCount, 0);
-  fly(w, { speed: 262, mass: 1.4 });
+  fly(w, { ...FASTEST });
   debris.update(1 / 60, new THREE.Vector3(TWINS.x, BASE, TWINS.z + 200), GROUND);
   assert.ok(debris.liveCount > 0, 'chunks in the air');
 

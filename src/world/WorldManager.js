@@ -33,7 +33,12 @@ export class WorldManager {
     this.timeScale = 0;
     // Bound once: the destruction integrator asks for the floor under every falling
     // body every frame, and a fresh closure per frame would be garbage per frame.
-    this._groundAt = (x, z) => collisionHeight(x, z);
+    // `ceiling` is the body's own height, so what comes back is the nearest roof or
+    // street beneath it rather than the tallest thing standing at that address.
+    this._groundAt = (x, z, ceiling = Infinity) => Math.max(
+      collisionHeight(x, z),
+      this.grid?.surfaceBelow(x, z, ceiling) ?? -Infinity,
+    );
   }
 
   async build(onProgress = () => {}) {

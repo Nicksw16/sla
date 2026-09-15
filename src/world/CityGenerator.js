@@ -549,6 +549,24 @@ export class ObstacleGrid {
     return bestDist <= maxDist ? { distance: bestDist, kind: bestKind } : null;
   }
 
+  /**
+   * The highest surface under a point, ignoring anything whose top is above
+   * `ceiling` - which is what makes it "under" rather than merely "here".
+   *
+   * This is what a falling body lands on. Without it a slab shed by a tower drops
+   * through every roof between it and the street, which is the one thing that gives
+   * away that the city is a set of boxes rather than a city.
+   */
+  surfaceBelow(x, z, ceiling = Infinity) {
+    let best = -Infinity;
+    for (const b of this.candidates(x, z, 0)) {
+      if (x < b.minX || x > b.maxX || z < b.minZ || z > b.maxZ) continue;
+      if (b.top > ceiling || b.top <= best) continue;
+      best = b.top;
+    }
+    return best;
+  }
+
   /** Retires a box. Its geometry stops colliding; its index stays valid. */
   remove(index) {
     const b = this.boxes[index];

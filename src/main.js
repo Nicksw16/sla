@@ -108,6 +108,8 @@ class Game {
     this._lastDistance = 0;
     this._outroTimer = 0;
     this._freeFlightRespawn = 0;
+    this._pendingCrashCam = null;
+    this._structureFocus = null;
     this._pendingResult = null;
     this._aircraftModel = null;
     this._hangarDrag = null;
@@ -351,12 +353,29 @@ class Game {
       this.input.vibrate(clamp01(e.severity), 90 + e.severity * 180);
     });
     this.bus.on('turbo:start', () => this.input.vibrate(0.25, 140));
+    // Remembered so the crash camera knows whether there is anything worth watching.
+    // Detach rather than impact: a hit that only scuffs the facade is not worth
+    // holding the player on a wide shot for seven seconds.
+    this.bus.on('structure:detach', (e) => {
+      this._structureHitAt = performance.now();
+      this._structureFocus = e.focus ?? null;
+      this._structureSpan = e.span ?? 200;
+    });
     this.bus.on('damage:destroyed', () => {
       // Free flight has no results screen to fall through to, so it respawns rather
       // than leaving the player parked in a wreck with nothing to press (§46).
       if (!this.missions.freeFlight) return;
-      this._freeFlightRespawn = 2.6;
-      this.cameraController.startCinematic(this.flight.position, { duration: 2.6, radius: 34, height: 12, spin: 0.9 });
+      // Flying into a tower hard enough to take part of it down is the one crash
+      // worth watching, and the default shot is the worst possible place to watch it
+      // from: thirty metres away, inside your own fireball, pointed at the wreck
+      // rather than at the four hundred metres of building coming apart above it.
+      // Pull back and hold on long enough for the slabs to reach the street.
+      // Deferred to the end of the frame rather than decided here. Handlers for one
+      // impact run in subscription order, and the damage system is wired up before
+      // the world is built - so at this instant the tower has not been touched yet
+      // and asking whether anything came down always answers no. By the end of the
+      // frame it has happened or it has not.
+      this._pendingCrashCam = this.flight.position.clone();
     });
     this.bus.on('checkpoint:passed', () => this.input.vibrate(0.15, 70));
     this.bus.on('secret:reached', (e) => {
@@ -801,6 +820,28 @@ class Game {
     // flight before it fires - to the menu, or straight into a mission - cancels it:
     // otherwise it lands 2.6 s later and teleports the player off the runway and into
     // the air over downtown, mid-countdown.
+    // The crash camera, chosen now that everything this frame was going to break has.
+    if (this._pendingCrashCam) {
+      const wreck = this._pendingCrashCam;
+      this._pendingCrashCam = null;
+      // Flying into a tower hard enough to take part of it down is the one crash
+      // worth watching, and the default shot is the worst possible place to watch it
+      // from: thirty metres out, inside your own fireball, pointed at the wreck
+      // instead of at the four hundred metres of building coming apart around it.
+      const felled = this._structureHitAt
+        && performance.now() - this._structureHitAt < 1500
+        && this._structureFocus;
+      // Stand far enough back to hold the whole building, and high enough that the
+      // orbit does not sweep the camera through the city around it. Aimed at the
+      // tower rather than at the wreck: the collapse is four hundred metres of
+      // building, and the burning airframe is the least of it.
+      const shot = felled
+        ? { duration: 7.5, radius: this._structureSpan * 1.25, height: this._structureSpan * 0.4, spin: 0.22 }
+        : { duration: 2.6, radius: 34, height: 12, spin: 0.9 };
+      this._freeFlightRespawn = shot.duration;
+      this.cameraController.startCinematic(felled ? this._structureFocus : wreck, shot);
+    }
+
     if (this._freeFlightRespawn > 0) {
       if (!this.missions.freeFlight) {
         this._freeFlightRespawn = 0;
