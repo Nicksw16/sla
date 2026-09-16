@@ -3,6 +3,7 @@ import { lerp, smoothstep } from '../core/MathUtils.js';
 import { Rng } from '../core/Rng.js';
 import { LANDMARKS, RUNWAY } from '../data/regions.js';
 import { terrainHeight, isWater } from './Terrain.js';
+import { BRIDGE, bridgeRoadHeight } from './Roads.js';
 import { DestructibleBuilding, RigidProp } from './Destructible.js';
 
 /**
@@ -180,22 +181,11 @@ class BoxBatch {
  * off each end at a height matching neither the deck nor the ground. From the air the
  * whole thing read as what it was: a road surface suspended in mid-air over a channel.
  *
- * The numbers that matter here are the water and the channel bed, not L.height. The
- * clearance under the deck is a piece of level design - the mission that flies the
- * channel passes under it, and a beacon hides beneath it - so it is a height somebody
- * chose, written down once.
+ * The shape of the road itself - the deck height and the grade of the approaches - is
+ * not written here any more. It lives in Roads.js, because the traffic has to drive on
+ * this road and a second copy of a road surface is exactly the kind of duplication that
+ * puts cars through the tarmac. What is built here is the structure that carries it.
  */
-const BRIDGE = {
-  DECK_Y: 78,        // deck surface above the water. This is the flyable gap.
-  SPAN_HALF: 420,    // half the main span; the dredged channel is 920 m wide here
-  DECK_W: 34,
-  PIER_FRAC: 0.46,   // where the pylons stand, as a fraction of the half-span
-  GRADE_RUN: 700,    // how far each approach takes to come down from the deck
-  LEVEL_RUN: 160,    // and how much of it carries on at ground level afterwards
-  STATIONS: 30,      // hanger spacing across the span
-  RAMP_SEGS: 22,     // slabs per approach; each one leans a little less than the last
-};
-
 function buildBridge(g, grid, L, mats) {
   const { DECK_Y: deckY, SPAN_HALF: spanHalf, DECK_W: deckW, PIER_FRAC } = BRIDGE;
   const h = L.height;
@@ -276,11 +266,10 @@ function buildBridge(g, grid, L, mats) {
 
   for (const side of [-1, 1]) {
     const x0 = L.x + side * spanHalf;
-    const foot = terrainHeight(x0 + side * BRIDGE.GRADE_RUN, L.z);
+    // The one definition of this road's shape, shared with whatever drives on it.
     const profile = (t) => {
       const x = x0 + side * run * t;
-      const graded = lerp(deckY, foot + 2.4, smoothstep(0, BRIDGE.GRADE_RUN / run, t));
-      return { x, y: Math.max(graded, terrainHeight(x, L.z) + 2.4) };
+      return { x, y: bridgeRoadHeight(x - L.x) };
     };
 
     let a = profile(0);

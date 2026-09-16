@@ -1,10 +1,14 @@
 import * as THREE from 'three';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { damp } from '../core/MathUtils.js';
+import { clamp, damp } from '../core/MathUtils.js';
 import { Rng } from '../core/Rng.js';
-import { PERIOD } from './CityGenerator.js';
-import { terrainHeight, isWater } from './Terrain.js';
 import { RUNWAY } from '../data/regions.js';
+import { BRIDGE_LINE, BRIDGE_SPAN, lineAt, lineIndexNear, roadSurfaceAt } from './Roads.js';
+import { PAINT, LIVERY, VEHICLE_CLASSES, VEHICLE_ORDER, vehicleMaterial } from './Vehicles.js';
+import {
+  BEHAVIOUR_RADIUS, applyTurn, chooseTurn, follow, gapAhead, laneClear, laneKey,
+  laneOffsetsFor, mustYield, nextJunction, oncomingClear, oncomingKey, roadExists,
+  spawnState, surfaceUnder, vehicleHeading, wantsOvertake,
+} from './Traffic.js';
 
 /**
  * Ground and air traffic (spec §27-29).
@@ -14,120 +18,29 @@ import { RUNWAY } from '../data/regions.js';
  * on vehicles near the player and nowhere else — ground traffic only exists within a
  * radius of the camera and is recycled, never spawned and forgotten.
  *
+ * This file owns the meshes and the recycling. What a vehicle is made of is in
+ * Vehicles.js and what it does is in Traffic.js, because the driving is the part worth
+ * testing and none of it needs a GPU to check.
+ *
  * Air traffic is a small fixed cast on waypoint loops. It is solid: hitting an
  * airliner is a real collision, tested directly against the handful of aircraft
  * rather than through the static grid.
  */
 
-const GROUND_RADIUS = 1250;
-
 /**
- * Vehicles.
+ * How far out the traffic exists, and how much of it there is.
  *
- * Each class is a handful of primitives merged into a single geometry, so a bus with
- * six wheels and a window band still costs one instanced draw call for the whole city.
- * Every vertex carries a part code, which is what lets one material paint a tyre black,
- * a window dark, and a headlight bright while the instance colour only ever touches
- * the bodywork.
+ * These two numbers are one decision. Three hundred vehicles spread over a 1250 m bubble
+ * is eighty-five kilometres of road with a car every two hundred and sixty metres on it,
+ * which from the air is not a city with traffic in it - it is a city with the occasional
+ * car. Pulling the bubble in concentrates the same budget where it can actually be seen:
+ * a four-metre car at eight hundred metres is six pixels, so nothing is lost at the edge,
+ * and the streets underneath get the density that makes them read as streets.
  */
-const PART = { BODY: 0, GLASS: 1, HEAD: 2, TAIL: 3, TYRE: 4, TRIM: 5 };
+const GROUND_RADIUS = 820;
 
-function tagged(geo, code, { x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0 } = {}) {
-  if (rx || ry || rz) geo.rotateX(rx), geo.rotateY(ry), geo.rotateZ(rz);
-  geo.translate(x, y, z);
-  const n = geo.attributes.position.count;
-  geo.setAttribute('aPart', new THREE.BufferAttribute(new Float32Array(n).fill(code), 1));
-  return geo;
-}
-
-/** Four wheels at the corners of a wheelbase, or six for the longer classes. */
-function wheels(radius, width, halfTrack, positions) {
-  return positions.map((z) => [1, -1].map((side) => tagged(
-    new THREE.CylinderGeometry(radius, radius, width, 6),
-    PART.TYRE,
-    { x: side * halfTrack, y: radius, z, rz: Math.PI / 2 },
-  ))).flat();
-}
-
-function carGeometry() {
-  const parts = [
-    tagged(new THREE.BoxGeometry(1.94, 0.66, 4.3), PART.BODY, { y: 0.66 }),
-    tagged(new THREE.BoxGeometry(1.74, 0.58, 2.2), PART.BODY, { y: 1.26, z: 0.1 }),
-    tagged(new THREE.BoxGeometry(1.78, 0.4, 2.06), PART.GLASS, { y: 1.3, z: 0.1 }),
-    tagged(new THREE.BoxGeometry(1.3, 0.16, 0.1), PART.HEAD, { y: 0.78, z: -2.16 }),
-    tagged(new THREE.BoxGeometry(1.3, 0.16, 0.1), PART.TAIL, { y: 0.82, z: 2.16 }),
-    ...wheels(0.33, 0.24, 0.92, [-1.42, 1.42]),
-  ];
-  return mergeGeometries(parts, false);
-}
-
-function busGeometry() {
-  const parts = [
-    tagged(new THREE.BoxGeometry(2.5, 2.5, 11.4), PART.BODY, { y: 1.7 }),
-    tagged(new THREE.BoxGeometry(2.3, 0.3, 10.8), PART.TRIM, { y: 3.02 }),
-    tagged(new THREE.BoxGeometry(2.54, 0.92, 9.6), PART.GLASS, { y: 2.4 }),
-    tagged(new THREE.BoxGeometry(2.2, 0.9, 0.1), PART.GLASS, { y: 2.4, z: -5.72 }),
-    tagged(new THREE.BoxGeometry(1.7, 0.2, 0.1), PART.HEAD, { y: 1.0, z: -5.72 }),
-    tagged(new THREE.BoxGeometry(1.7, 0.2, 0.1), PART.TAIL, { y: 1.1, z: 5.72 }),
-    ...wheels(0.52, 0.3, 1.14, [-3.9, 3.1, 4.3]),
-  ];
-  return mergeGeometries(parts, false);
-}
-
-function truckGeometry() {
-  const parts = [
-    tagged(new THREE.BoxGeometry(2.46, 2.3, 4.4), PART.BODY, { y: 1.7, z: -5.2 }),
-    tagged(new THREE.BoxGeometry(2.5, 0.9, 0.12), PART.GLASS, { y: 2.5, z: -7.36 }),
-    tagged(new THREE.BoxGeometry(2.6, 3.0, 10.2), PART.TRIM, { y: 2.3, z: 2.2 }),
-    tagged(new THREE.BoxGeometry(0.5, 1.6, 0.4), PART.BODY, { x: 1.1, y: 2.6, z: -2.8 }),
-    tagged(new THREE.BoxGeometry(1.6, 0.22, 0.12), PART.HEAD, { y: 0.9, z: -7.42 }),
-    tagged(new THREE.BoxGeometry(2.0, 0.22, 0.12), PART.TAIL, { y: 1.0, z: 7.36 }),
-    ...wheels(0.56, 0.32, 1.12, [-6.1, 4.6, 6.0]),
-  ];
-  return mergeGeometries(parts, false);
-}
-
-function vehicleGeometry() {
-  return { car: carGeometry(), bus: busGeometry(), truck: truckGeometry() };
-}
-
-/**
- * One material for every vehicle. The part code decides what each surface is: the
- * instance colour paints the bodywork only, tyres stay black whatever colour the car
- * is, glass darkens, and the lamps come on with the city.
- */
-function vehicleMaterial() {
-  const mat = new THREE.MeshStandardMaterial({ roughness: 0.5, metalness: 0.35 });
-  mat.userData.uniforms = { uNight: { value: 0 } };
-  mat.onBeforeCompile = (shader) => {
-    shader.uniforms.uNight = mat.userData.uniforms.uNight;
-    shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', `#include <common>
-        attribute float aPart;
-        varying float vPart;`)
-      .replace('#include <begin_vertex>', `#include <begin_vertex>
-        vPart = aPart;`);
-    shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', `#include <common>
-        uniform float uNight;
-        varying float vPart;`)
-      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
-        if (vPart > 3.5 && vPart < 4.5) {
-          diffuseColor.rgb = vec3(0.045, 0.048, 0.052);   // tyre
-        } else if (vPart > 0.5 && vPart < 1.5) {
-          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.05, 0.08, 0.11), 0.82); // glass
-        } else if (vPart > 4.5) {
-          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.82, 0.84, 0.86), 0.7);  // trim
-        } else if (vPart > 1.5 && vPart < 2.5) {
-          diffuseColor.rgb = vec3(0.85, 0.86, 0.8);
-          totalEmissiveRadiance += vec3(1.0, 0.95, 0.82) * (0.25 + uNight * 2.2);
-        } else if (vPart > 2.5 && vPart < 3.5) {
-          diffuseColor.rgb = vec3(0.32, 0.05, 0.05);
-          totalEmissiveRadiance += vec3(1.0, 0.13, 0.08) * (0.3 + uNight * 1.6);
-        }`);
-  };
-  return mat;
-}
+/** Corner duration is a function of the corner, so a bus swings wider than a hatch. */
+const TURN_ARC = 26;
 
 function airlinerGeometry() {
   const g = new THREE.Group();
@@ -194,9 +107,14 @@ export class TrafficManager {
 
     this._m = new THREE.Matrix4();
     this._q = new THREE.Quaternion();
+    this._qp = new THREE.Quaternion();
     this._p = new THREE.Vector3();
     this._s = new THREE.Vector3(1, 1, 1);
     this._up = new THREE.Vector3(0, 1, 0);
+    this._right = new THREE.Vector3(1, 0, 0);
+    this._surface = {};
+    this._lanes = new Map();
+    this._elapsed = 0;
 
     this.ground = [];
     this.air = [];
@@ -204,40 +122,71 @@ export class TrafficManager {
     this._buildAir();
   }
 
+  /**
+   * One instanced mesh per class, sized by the quality preset.
+   *
+   * Paint is per instance and weighted the way a real car park is, so a street is
+   * mostly white, silver and black with colour as the minority - and the finish varies
+   * with it, because a city where every car has the same showroom lacquer is as
+   * uniform as one where they are all the same shape.
+   */
   _buildGround() {
     const density = this.settings.preset.trafficDensity ?? 1;
-    const counts = {
-      car: Math.round(230 * density),
-      bus: Math.round(26 * density),
-      truck: Math.round(34 * density),
-    };
-    const geos = vehicleGeometry();
-    const palettes = {
-      car: [0xd8dee4, 0x2b2f36, 0xb2372e, 0x24486e, 0xa8a093, 0x2e6e4c],
-      bus: [0xd8b32a, 0xd8dee4, 0x2d6ea8],
-      truck: [0xd8dee4, 0x35507a, 0x8a3b2c],
-    };
+    const total = Math.round(520 * density);
+    const paintTotal = PAINT.reduce((a, p) => a + p.weight, 0);
     this.groundMeshes = {};
     this.vehicleMaterials = [];
-    for (const kind of ['car', 'bus', 'truck']) {
+
+    for (const kind of VEHICLE_ORDER) {
+      const spec = VEHICLE_CLASSES[kind];
+      const count = Math.max(1, Math.round(total * spec.share));
+      const geo = spec.geometry();
       const mat = vehicleMaterial();
       this.vehicleMaterials.push(mat);
-      const mesh = new THREE.InstancedMesh(geos[kind], mat, Math.max(1, counts[kind]));
+      const mesh = new THREE.InstancedMesh(geo, mat, count);
       mesh.name = `traffic:${kind}`;
       mesh.castShadow = false;
       mesh.receiveShadow = false;
       mesh.frustumCulled = false;
+
+      // Per-instance paint finish and indicator state, alongside the body colour.
+      const finish = new THREE.InstancedBufferAttribute(new Float32Array(count), 1);
+      const signal = new THREE.InstancedBufferAttribute(new Float32Array(count), 1);
+      signal.setUsage(THREE.DynamicDrawUsage);
+      geo.setAttribute('aFinish', finish);
+      geo.setAttribute('aSignal', signal);
+
       this.group.add(mesh);
       this.groundMeshes[kind] = mesh;
-      for (let i = 0; i < counts[kind]; i++) {
-        mesh.setColorAt(i, new THREE.Color(this.rng.pick(palettes[kind])));
+
+      for (let i = 0; i < count; i++) {
+        const paint = this._paintFor(kind, paintTotal);
+        mesh.setColorAt(i, new THREE.Color(paint.color));
+        finish.setX(i, clamp(paint.metal + this.rng.range(-0.18, 0.18), 0, 1));
         this.ground.push({
-          kind, index: i, mesh,
-          x: 0, z: 0, dir: 0, speed: 0, axis: 0, active: false,
+          kind, index: i, mesh, signalAttr: signal,
+          length: spec.length, accel: spec.accel, brake: spec.brake,
+          cruiseRange: spec.cruise,
+          axis: 0, line: 0, side: 1, lane: 0, s: 0,
+          speed: 0, cruise: 0, signal: 0, turning: null, active: false,
         });
       }
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+      finish.needsUpdate = true;
     }
+  }
+
+  /** Livery where the colour is what the vehicle is, weighted paint otherwise. */
+  _paintFor(kind, paintTotal) {
+    const livery = LIVERY[kind];
+    if (Array.isArray(livery)) return this.rng.pick(livery);
+    if (livery) return livery;
+    let roll = this.rng.next() * paintTotal;
+    for (const p of PAINT) {
+      roll -= p.weight;
+      if (roll <= 0) return p;
+    }
+    return PAINT[0];
   }
 
   _buildAir() {
@@ -267,23 +216,40 @@ export class TrafficManager {
     }
   }
 
-  /** Places a ground vehicle on a random street line near the player. */
+
+  /**
+   * Places a ground vehicle on a lane near the player.
+   *
+   * The lane has to be a road that exists: the street grid is painted over the whole
+   * world, water included, so a lane picked without asking puts a car on the harbour
+   * bed. The one road allowed over water is the bridge, and roadExists knows it.
+   */
   _respawn(v, center) {
     const r = this.rng;
-    for (let attempt = 0; attempt < 6; attempt++) {
-      // Pick a lane on the street grid, then a point along it.
-      const axis = r.bool() ? 0 : 1;
-      const lane = Math.round((center[axis === 0 ? 'z' : 'x'] + r.range(-GROUND_RADIUS, GROUND_RADIUS)) / PERIOD) * PERIOD;
-      const along = center[axis === 0 ? 'x' : 'z'] + r.range(-GROUND_RADIUS, GROUND_RADIUS);
-      const x = axis === 0 ? along : lane + (r.bool() ? 5 : -5);
-      const z = axis === 0 ? lane + (r.bool() ? 5 : -5) : along;
-      if (isWater(x, z)) continue;
-      v.x = x;
-      v.z = z;
-      v.axis = axis;
-      v.dir = r.bool() ? 1 : -1;
-      v.speed = (v.kind === 'car' ? r.range(11, 19) : r.range(7, 13)) * v.dir;
-      v.active = true;
+    // Is the bridge in range? It is the only crossing of the channel, so it carries
+    // far more than its share of anything nearby - and a bridge with no traffic on it
+    // is the thing a player notices from the air.
+    const bridgeNear = Math.abs(center.x - BRIDGE_SPAN.x) < GROUND_RADIUS + BRIDGE_SPAN.half
+      && Math.abs(center.z - BRIDGE_SPAN.z) < GROUND_RADIUS;
+
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const onBridge = bridgeNear && r.next() < 0.35;
+      const axis = onBridge ? 0 : (r.bool() ? 0 : 1);
+      const cross = axis === 0 ? center.z : center.x;
+      const along = axis === 0 ? center.x : center.z;
+      const line = onBridge ? BRIDGE_LINE
+        : lineIndexNear(cross + r.range(-GROUND_RADIUS, GROUND_RADIUS));
+      const s = onBridge
+        ? BRIDGE_SPAN.x + r.range(-BRIDGE_SPAN.half, BRIDGE_SPAN.half)
+        : along + r.range(-GROUND_RADIUS, GROUND_RADIUS);
+      if (!roadExists(axis, line, s)) continue;
+      const lanes = laneOffsetsFor(line, s, axis);
+      spawnState(v, {
+        axis, line, s,
+        side: r.bool() ? 1 : -1,
+        lane: Math.floor(r.next() * lanes.length),
+        cruise: r.range(v.cruiseRange[0], v.cruiseRange[1]),
+      });
       return;
     }
     v.active = false;
@@ -294,32 +260,46 @@ export class TrafficManager {
     for (const mat of this.vehicleMaterials ?? []) mat.userData.uniforms.uNight.value = night;
   }
 
-  update(dt, cameraPosition, elapsed) {
-    // --- ground vehicles
+  /**
+   * Group the active vehicles by the lane they are in and sort each along its
+   * direction of travel, so every driver can be handed the one in front of it. Three
+   * hundred vehicles make this far cheaper than asking each car to search.
+   */
+  _buildLanes() {
+    const lanes = this._lanes;
+    for (const arr of lanes.values()) arr.length = 0;
     for (const v of this.ground) {
-      if (!v.active) {
-        this._respawn(v, cameraPosition);
-        if (!v.active) continue;
-      }
-      if (v.axis === 0) v.x += v.speed * dt;
-      else v.z += v.speed * dt;
-
-      const dx = v.x - cameraPosition.x;
-      const dz = v.z - cameraPosition.z;
-      if (dx * dx + dz * dz > GROUND_RADIUS * GROUND_RADIUS) {
-        this._respawn(v, cameraPosition);
-        continue;
-      }
-
-      // The geometries stand on their wheels, so the road surface is the origin.
-      const y = terrainHeight(v.x, v.z) + 0.08;
-      const heading = v.axis === 0 ? (v.speed > 0 ? Math.PI / 2 : -Math.PI / 2) : (v.speed > 0 ? 0 : Math.PI);
-      this._p.set(v.x, y, v.z);
-      this._q.setFromAxisAngle(this._up, heading);
-      this._m.compose(this._p, this._q, this._s);
-      v.mesh.setMatrixAt(v.index, this._m);
+      if (!v.active || v.turning) continue;
+      const key = laneKey(v);
+      let arr = lanes.get(key);
+      if (!arr) lanes.set(key, (arr = []));
+      arr.push(v);
     }
-    for (const mesh of Object.values(this.groundMeshes)) mesh.instanceMatrix.needsUpdate = true;
+    for (const arr of lanes.values()) {
+      if (arr.length > 1) arr.sort((a, b) => (a.s - b.s) * a.side);
+    }
+    return lanes;
+  }
+
+  update(dt, cameraPosition, elapsed) {
+    this._elapsed = elapsed ?? this._elapsed + dt;
+    for (const mat of this.vehicleMaterials ?? []) {
+      mat.userData.uniforms.uTime.value = this._elapsed;
+    }
+
+    for (const v of this.ground) {
+      if (!v.active) this._respawn(v, cameraPosition);
+    }
+    const lanes = this._buildLanes();
+
+    for (const v of this.ground) {
+      if (!v.active) continue;
+      this._drive(v, dt, cameraPosition, lanes);
+      this._place(v);
+    }
+    for (const mesh of Object.values(this.groundMeshes)) {
+      mesh.instanceMatrix.needsUpdate = true;
+    }
 
     // --- air traffic on waypoint loops
     for (const a of this.air) {
@@ -341,6 +321,139 @@ export class TrafficManager {
         a.obj.userData.rotor.rotation.y += dt * 34;
         a.obj.userData.tailRotor.rotation.x += dt * 48;
       }
+    }
+  }
+
+  /**
+   * One vehicle's decisions for one step.
+   *
+   * Beyond the behaviour radius a driver still follows the car in front - traffic that
+   * passes through itself in the middle distance is worse than traffic that runs a red
+   * nobody can see - but stops paying for signals, turns and overtaking.
+   */
+  _drive(v, dt, cameraPosition, lanes) {
+    if (v.turning) return this._corner(v, dt);
+
+    const near = (() => {
+      const dx = (v.axis === 0 ? v.s : lineAt(v.line)) - cameraPosition.x;
+      const dz = (v.axis === 0 ? lineAt(v.line) : v.s) - cameraPosition.z;
+      if (dx * dx + dz * dz > GROUND_RADIUS * GROUND_RADIUS) { v.active = false; return false; }
+      return dx * dx + dz * dz < BEHAVIOUR_RADIUS * BEHAVIOUR_RADIUS;
+    })();
+    if (!v.active) return;
+
+    const queue = lanes.get(laneKey(v));
+    const leader = queue ? queue[queue.indexOf(v) + 1] : null;
+    const junction = near ? nextJunction(v) : null;
+    const { gap, leadSpeed } = gapAhead(v, leader, junction, this._elapsed);
+
+    // Overtake rather than sit behind something slow, where the road allows it.
+    if (near && !v.turning && wantsOvertake(v, gap, leadSpeed)) {
+      const lanesHere = laneOffsetsFor(v.line, v.s, v.axis);
+      const target = v.lane === 0 ? 1 : 0;
+      if (target < lanesHere.length && laneClear(v, target, lanes.get(laneKey({ ...v, lane: target })) ?? [])) {
+        v.lane = target;
+        v.signal = target > 0 ? 1 : -1;
+        v.signalUntil = this._elapsed + 1.6;
+      }
+    }
+
+    v.speed = Math.max(0, v.speed + follow(v, gap, leadSpeed) * dt);
+    v.s += v.speed * v.side * dt;
+
+    // At the junction: go straight on, or take the corner if one was chosen.
+    if (near && junction && junction.distance <= 1.5 && v.speed > 0.4) {
+      const turn = chooseTurn(v, junction, this.rng);
+      if (!turn) { v.active = false; return; }
+      if (turn.turn !== 0) {
+        if (v.speed > 9) {
+          // Too fast for the corner; take it next time round rather than on two wheels.
+          v.speed = Math.min(v.speed, 9);
+        } else if (mustYield(v, turn.turn)
+          && !oncomingClear(v, junction, lanes.get(oncomingKey(v)) ?? [])) {
+          v.speed = Math.min(v.speed, 1.5);
+        } else {
+          this._beginCorner(v, junction, turn.turn);
+        }
+      }
+    }
+
+    if (v.signalUntil && this._elapsed > v.signalUntil) { v.signal = 0; v.signalUntil = 0; }
+    if (!roadExists(v.axis, v.line, v.s)) v.active = false;
+  }
+
+  /** Start a corner: remember where it began, and where it comes out. */
+  _beginCorner(v, junction, turn) {
+    const from = { axis: v.axis, line: v.line, side: v.side, lane: v.lane, s: v.s };
+    const entry = surfaceUnder(v, {});
+    applyTurn(v, junction, turn);
+    const exit = surfaceUnder(v, {});
+    v.turning = {
+      t: 0,
+      duration: Math.max(0.9, TURN_ARC / Math.max(v.speed, 3)),
+      fromX: entry.x, fromZ: entry.z,
+      toX: exit.x, toZ: exit.z,
+      pivotX: from.axis === 0 ? lineAt(junction.index) : lineAt(from.line),
+      pivotZ: from.axis === 0 ? lineAt(from.line) : lineAt(junction.index),
+      fromHeading: vehicleHeading(from),
+      toHeading: vehicleHeading(v),
+    };
+    v.signal = turn;
+    v.signalUntil = 0;
+  }
+
+  /**
+   * Drive the corner itself.
+   *
+   * A quadratic through the junction centre, which is the shape a car actually takes,
+   * and the heading follows the tangent rather than snapping at the end - a vehicle
+   * that changes facing in one frame at a junction is the thing that reads as a glitch
+   * from any altitude.
+   */
+  _corner(v, dt) {
+    const c = v.turning;
+    c.t += dt / c.duration;
+    const t = Math.min(1, c.t);
+    const u = 1 - t;
+    const x = u * u * c.fromX + 2 * u * t * c.pivotX + t * t * c.toX;
+    const z = u * u * c.fromZ + 2 * u * t * c.pivotZ + t * t * c.toZ;
+    const dx = 2 * u * (c.pivotX - c.fromX) + 2 * t * (c.toX - c.pivotX);
+    const dz = 2 * u * (c.pivotZ - c.fromZ) + 2 * t * (c.toZ - c.pivotZ);
+    v.cornerX = x;
+    v.cornerZ = z;
+    v.cornerHeading = Math.atan2(dx, -dz);
+    v.speed = Math.max(3.5, v.speed - v.brake * 0.35 * dt);
+    if (t >= 1) {
+      v.turning = null;
+      v.cornerX = undefined;
+      v.signal = 0;
+    }
+  }
+
+  /** Write the vehicle's transform into its instanced mesh. */
+  _place(v) {
+    let x; let z; let heading;
+    if (v.turning) {
+      x = v.cornerX; z = v.cornerZ; heading = v.cornerHeading;
+      const surf = roadSurfaceAt(x, z);
+      this._p.set(x, surf.y + 0.08, z);
+      this._q.setFromAxisAngle(this._up, heading);
+    } else {
+      const surf = surfaceUnder(v, this._surface);
+      x = surf.x; z = surf.z;
+      this._p.set(x, surf.y + 0.08, z);
+      this._q.setFromAxisAngle(this._up, vehicleHeading(v));
+      // Lean with the road. This is what a car climbing the bridge approach looks like.
+      if (surf.pitch) {
+        this._qp.setFromAxisAngle(this._right, surf.pitch);
+        this._q.multiply(this._qp);
+      }
+    }
+    this._m.compose(this._p, this._q, this._s);
+    v.mesh.setMatrixAt(v.index, this._m);
+    if (v.signalAttr.getX(v.index) !== v.signal) {
+      v.signalAttr.setX(v.index, v.signal);
+      v.signalAttr.needsUpdate = true;
     }
   }
 
