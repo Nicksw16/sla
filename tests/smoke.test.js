@@ -87,6 +87,30 @@ const releaseKey = (page, key) => bounded(page.keyboard.up(key), 20000, `release
 const evaluate = (page, fn, arg, ms = 30000) => bounded(page.evaluate(fn, arg), ms, 'page.evaluate');
 
 /**
+ * Poll the game until it has actually responded, instead of sleeping and hoping.
+ *
+ * The simulation only advances when a frame is drawn, and the renderer here is
+ * SwiftShader on a CPU: a 900 ms sleep is two frames on a loaded machine and fifty on
+ * an idle one. Every check below that held a key for a fixed wall-clock interval was
+ * therefore measuring the machine rather than the controls, and did it intermittently,
+ * which is the worst way to be wrong. Three consecutive runs of this suite failed on
+ * three different checks - "A banks the aircraft left", "the route can be flown on the
+ * keyboard", "Shift burns turbo" - with no change between them that touched any of the
+ * three. Waiting for the condition costs nothing when the machine is fast and simply
+ * works when it is not.
+ */
+async function until(page, read, test, timeout = 60000) {
+  const deadline = Date.now() + timeout;
+  let last = null;
+  while (Date.now() < deadline) {
+    last = await evaluate(page, read);
+    if (test(last)) return last;
+    await sleep(60);
+  }
+  return null;
+}
+
+/**
  * Waits for a predicate instead of sleeping a guessed number of milliseconds.
  * Under software rendering a single frame can take longer than any sleep worth
  * writing, so "press the key, sleep 250 ms, read the state" tests the renderer.
@@ -285,21 +309,19 @@ async function main() {
   // These checks assert direction, and read the control surface as well as the
   // attitude. Under software rendering the frame rate is low enough that a fixed
   // attitude threshold is a measure of the renderer, not of the controls.
-  const axisCheck = async (name, key, read, expectSign, ms = 1400) => {
+  const axisCheck = async (name, key, read, expectSign) => {
     const before = await evaluate(page, read);
     await holdKey(page, key);
-    await sleep(ms);
-    const during = await evaluate(page, read);
+    const during = await until(page, read,
+      (r) => (r.value - before.value) * expectSign > 0.004 && r.control * expectSign > 0.25);
+    const last = during ?? await evaluate(page, read);
     await releaseKey(page, key);
-    await sleep(400);
-    const delta = (during.value - before.value) * expectSign;
-    const deflected = during.control * expectSign;
-    check(name, delta > 0.004 && deflected > 0.25,
-      `value ${before.value.toFixed(3)} -> ${during.value.toFixed(3)}, surface ${during.control.toFixed(2)}`);
+    check(name, !!during,
+      `value ${before.value.toFixed(3)} -> ${last.value.toFixed(3)}, surface ${last.control.toFixed(2)}`);
   };
 
   await axisCheck('W opens the throttle', 'w',
-    () => ({ value: window.__skyline.flight.throttleCmd, control: 1 }), 1, 900);
+    () => ({ value: window.__skyline.flight.throttleCmd, control: 1 }), 1);
   await axisCheck('D banks the aircraft right', 'd',
     () => ({ value: window.__skyline.flight.bank, control: window.__skyline.flight.control.roll }), 1);
   await axisCheck('A banks the aircraft left', 'a',
@@ -311,18 +333,20 @@ async function main() {
 
   // Level the wings again before flying the route.
   await holdKey(page, 'z');
-  await sleep(1500);
+  const levelledState = await until(page, () => ({ bank: Math.abs(window.__skyline.flight.bank) }),
+    (r) => r.bank < 0.3);
+  const levelled = (levelledState ?? await evaluate(page,
+    () => ({ bank: Math.abs(window.__skyline.flight.bank) }))).bank;
   await releaseKey(page, 'z');
-  const levelled = await page.evaluate(() => Math.abs(window.__skyline.flight.bank));
-  check('Z levels the wings', levelled < 0.3, `bank ${levelled.toFixed(2)} rad`);
+  check('Z levels the wings', !!levelledState, `bank ${levelled.toFixed(2)} rad`);
 
-  const turbo0 = await evaluate(page, () => window.__skyline.turbo.energy);
+  const readTurbo = () => ({ e: window.__skyline.turbo.energy, used: window.__skyline.turbo.totalUsed });
+  const turbo0 = (await evaluate(page, readTurbo)).e;
   await holdKey(page, 'Shift');
-  await sleep(900);
+  const burned = await until(page, readTurbo, (r) => r.e < turbo0 && r.used > 0);
+  const turboState = burned ?? await evaluate(page, readTurbo);
   await releaseKey(page, 'Shift');
-  const turboState = await page.evaluate(() => ({ e: window.__skyline.turbo.energy, used: window.__skyline.turbo.totalUsed }));
-  check('Shift burns turbo', turboState.e < turbo0 && turboState.used > 0,
-    `${turbo0.toFixed(0)} -> ${turboState.e.toFixed(0)}`);
+  check('Shift burns turbo', !!burned, `${turbo0.toFixed(0)} -> ${turboState.e.toFixed(0)}`);
 
   await pressKey(page, 'c');
   const cycled = await waitFor(page, () => window.__skyline.cameraController.mode !== 'chase');
