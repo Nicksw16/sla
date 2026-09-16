@@ -10,6 +10,7 @@ import { TimeOfDay } from './TimeOfDay.js';
 import { WeatherManager } from './WeatherManager.js';
 import { TrafficManager } from './TrafficManager.js';
 import { DestructionField } from './Destructible.js';
+import { CityDestruction } from './CityDestruction.js';
 import { DebrisField } from '../fx/Debris.js';
 
 /**
@@ -74,6 +75,18 @@ export class WorldManager {
     this.debris = new DebrisField({ scene: this.scene, settings: this.settings });
     this.destruction = new DestructionField({ bus: this.bus, debris: this.debris });
     for (const b of this.landmarks.userData.destructibles ?? []) this.destruction.add(b);
+
+    // And every ordinary building in the city, which becomes a real lattice the moment
+    // something hits it rather than being built as one. See CityDestruction.
+    this.cityDestruction = new CityDestruction({
+      recipes: city.recipes,
+      batches: city.batches,
+      grid: this.grid,
+      parent: this.city,
+      field: this.destruction,
+    });
+    this.cityDestruction.rememberHome();
+    this.destruction.convert = (ref) => this.cityDestruction.convert(ref);
     // Collisions are already routed through this object, so this is where an impact
     // becomes structural damage. The flight model stays ignorant of buildings.
     this._offImpact = this.bus.on('flight:impact', (e) => this.destruction.impact(e));
@@ -309,6 +322,7 @@ export class WorldManager {
    */
   resetDestruction() {
     this.destruction?.reset();
+    this.cityDestruction?.reset();
   }
 
   /** Environment block for FlightModel. */

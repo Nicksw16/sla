@@ -389,6 +389,14 @@ class InstanceBatch {
 
   add(x, y, z, sx, sy, sz, rotY, color, glass = 0, style = 0, ground = 0) {
     this.items.push({ x, y, z, sx, sy, sz, rotY, color, glass, style, ground });
+    // The index is what lets a building be taken out of the shared mesh later: it is
+    // one of three thousand instances in there, and hiding it means knowing which.
+    return this.items.length - 1;
+  }
+
+  /** How many instances have been added so far - the start of the next building. */
+  get mark() {
+    return this.items.length;
   }
 
   build(name) {
@@ -644,6 +652,9 @@ function addBuilding(ctx, opts) {
   const { box, cyl, roof, grid } = ctx;
   const { x, z, w, d, height, rot, palette, glass, rng, type, detail = 1 } = opts;
   const base = terrainHeight(x, z) - 2;
+  // Where this building's instances start in each batch. Its adds are contiguous -
+  // addBuilding runs to completion before the next one starts - so a range is enough.
+  const mark = { box: box.mark, cyl: cyl.mark, roof: roof.mark };
   const color = new THREE.Color(palette[rng.int(0, palette.length - 1)]);
   color.offsetHSL(0, 0, rng.range(-0.05, 0.05));
   // Facade style: 0 office, 1 home, 2 industrial. It decides window size, how the
@@ -729,7 +740,32 @@ function addBuilding(ctx, opts) {
   }
 
   const halfW = Math.max(w, d) * 0.5;
-  grid.add(x - halfW, x + halfW, z - halfW, z + halfW, base, top, 'building');
+
+  /**
+   * The recipe, kept so the building can be rebuilt as a destructible lattice if
+   * something flies into it.
+   *
+   * This is everything the generator already worked out and used to throw away. Three
+   * thousand of these is a rounding error of memory, and without them a city building
+   * cannot be damaged at all: its collider carried no reference to anything, so an
+   * impact had nothing to route to. Landmarks were the only thing in the world that
+   * could be hurt.
+   */
+  const ref = {
+    index: ctx.recipes.length,
+    x, z, w, d, rot, base, top, type, style,
+    height: top - base,
+    color: color.getHex(),
+    spans: {
+      box: [mark.box, box.mark],
+      cyl: [mark.cyl, cyl.mark],
+      roof: [mark.roof, roof.mark],
+    },
+    collider: -1,
+    building: null,        // the live destructible, once it has been converted
+  };
+  ref.collider = grid.add(x - halfW, x + halfW, z - halfW, z + halfW, base, top, 'building', ref);
+  ctx.recipes.push(ref);
   return top;
 }
 
@@ -764,6 +800,8 @@ export function generateCity({ seed = 20260912, detail = 1 } = {}) {
     // water tank to one roof moved every building after it, which silently invalidates
     // every checkpoint and beacon authored against the city.
     deco: new Rng(seed ^ 0x5eed5),
+    // One row per building, in the order they are placed. See addBuilding.
+    recipes: [],
   };
 
   const urban = new Float32Array(9);
@@ -852,5 +890,13 @@ export function generateCity({ seed = 20260912, detail = 1 } = {}) {
     facade.dispose();
     roofMat.dispose();
   };
-  return { group, grid, urban, stats: group.userData.stats };
+  // The meshes go out with the recipes, because hiding a building means writing an
+  // empty matrix into the instance it owns.
+  group.userData.recipes = ctx.recipes;
+  group.userData.batches = { box: boxes, cyl: cyls, roof: roofs };
+  return {
+    group, grid, urban, stats: group.userData.stats,
+    recipes: ctx.recipes,
+    batches: group.userData.batches,
+  };
 }

@@ -575,12 +575,20 @@ function buildAirport(g, grid, mats) {
  * it does the job the setbacks were doing before without pretending the building
  * tapers when it does not.
  */
-function towerMaterial() {
+/**
+ * The curtain wall worn by anything built as a lattice of structural modules.
+ *
+ * Parameterised by colour because the city's own buildings are converted into this
+ * same lattice when something flies into one, and a converted building has to keep
+ * looking like the building it was a frame earlier. The shader is identical whatever
+ * the colour, so every one of these compiles to the same program and costs one.
+ */
+export function latticeMaterial(color = 0xb9c3c9) {
   // Low metalness on purpose. The world has no environment map - the only specular
   // input is the sun - so a metalness of 0.6 has almost nothing to reflect and the
   // towers came out as two black cutouts against the skyline.
   const mat = new THREE.MeshStandardMaterial({
-    color: 0xb9c3c9, roughness: 0.34, metalness: 0.22,
+    color, roughness: 0.34, metalness: 0.22,
   });
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.uTowerNight = mat.userData.uniforms.uTowerNight;
@@ -701,7 +709,7 @@ function buildTwinTowers(g, grid, L, mats) {
   const a = h * 0.076;              // half-width of the square plan
   const gap = a * 1.5;              // clear air between the two shafts
   const offset = a + gap * 0.5;
-  const glass = towerMaterial();
+  const glass = latticeMaterial();
   g.userData.towerMaterial = glass;
 
   // Forty-two storeys of nine-by-nine cells: blocks about seven and a half metres

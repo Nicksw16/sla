@@ -641,6 +641,30 @@ export class DestructibleBuilding {
     return this.modules[level * cells * cells + cz * cells + cx];
   }
 
+  /**
+   * Give back everything this building took: its mesh, its collision boxes, and the
+   * props hanging off it.
+   *
+   * A city building that has been knocked down is eventually cleared to make room for
+   * the next one, and a lattice that is dropped without this leaves its collision boxes
+   * behind - an invisible building you can still fly into.
+   */
+  dispose() {
+    this.shell?.dispose();
+    for (const g of this.groups ?? []) {
+      if (g.colliderIndex >= 0) this.grid.remove(g.colliderIndex);
+      g.colliderIndex = -1;
+    }
+    for (const p of this.props ?? []) {
+      if (p.colliderIndex >= 0) this.grid.remove(p.colliderIndex);
+      p.colliderIndex = -1;
+      p.object?.parent?.remove(p.object);
+    }
+    this.modules.length = 0;
+    this.falling.length = 0;
+    this.props.length = 0;
+  }
+
   /** Every module on one storey, for hanging a roof or a bridge off it. */
   levelModules(level) {
     return this.modules.filter((m) => m.level === level);
@@ -1181,6 +1205,12 @@ export class DestructionField {
     return building;
   }
 
+  remove(building) {
+    const i = this.buildings.indexOf(building);
+    if (i >= 0) this.buildings.splice(i, 1);
+    return i >= 0;
+  }
+
   get anyActive() {
     return this.buildings.some((b) => b.falling.length > 0);
   }
@@ -1196,6 +1226,13 @@ export class DestructionField {
     if (!payload?.point) return null;
     this._effects = 0;
     let building = payload.ref?.building ?? null;
+    // A reference with no building behind it yet is one of the city's own buildings,
+    // which exists as a handful of instances in a shared mesh until the moment
+    // something hits it. Converting it here is what makes every building in the city
+    // destructible without any of them costing anything until they are.
+    if (!building && payload.ref && this.convert) {
+      building = this.convert(payload.ref) ?? null;
+    }
     if (!building) {
       for (const b of this.buildings) {
         if (b.reaches(payload.point, 14)) { building = b; break; }
