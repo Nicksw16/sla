@@ -15,6 +15,7 @@ import { generateCity } from '../src/world/CityGenerator.js';
 import { CityDestruction } from '../src/world/CityDestruction.js';
 import { DestructionField } from '../src/world/Destructible.js';
 import { EventBus } from '../src/core/EventBus.js';
+import { DebrisField } from '../src/fx/Debris.js';
 import { AIRCRAFT } from '../src/data/aircraft.js';
 
 let passed = 0;
@@ -41,7 +42,14 @@ function world() {
   for (const t of ['structure:impact', 'structure:detach', 'structure:collapse']) {
     bus.on(t, (e) => events.push({ type: t, ...e }));
   }
-  const field = new DestructionField({ bus });
+  // With a debris field, not without one. Every event the destruction system emits is
+  // consumed here, and `this.debris?.burst(...)` never evaluates its arguments when
+  // debris is missing - so a malformed event sails through a test that leaves it out.
+  // One did: the pylon event carried no object for the burst to come from.
+  const debris = new DebrisField({
+    scene: new THREE.Group(), settings: { preset: { particles: 1 } },
+  });
+  const field = new DestructionField({ bus, debris });
   const cd = new CityDestruction({
     recipes: city.recipes, batches: city.batches, grid: city.grid, parent, field,
   });

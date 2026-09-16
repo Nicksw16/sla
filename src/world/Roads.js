@@ -138,6 +138,36 @@ export function bridgeInfluence(x, z) {
 }
 
 /**
+ * Where the bridge deck is no longer there.
+ *
+ * The road network is otherwise a pure function of position, which is what keeps the
+ * traffic and the structure from disagreeing - but a bridge that has had a hole blown
+ * in it is a fact about the world, not about the position, and the traffic has to know.
+ * Without it cars drive across the gap on air, which is a worse sight than the gap.
+ *
+ * Kept as ranges along the bridge rather than per segment so the check stays a couple
+ * of comparisons: this is read for every vehicle, every frame.
+ */
+const deckGaps = [];
+
+export function openDeckGap(fromX, toX) {
+  deckGaps.push([Math.min(fromX, toX), Math.max(fromX, toX)]);
+}
+
+export function clearDeckGaps() {
+  deckGaps.length = 0;
+}
+
+export function deckGone(x) {
+  for (let i = 0; i < deckGaps.length; i++) {
+    if (x >= deckGaps[i][0] && x <= deckGaps[i][1]) return true;
+  }
+  return false;
+}
+
+export const deckGapCount = () => deckGaps.length;
+
+/**
  * The drivable surface at a point: the bridge deck where there is one, the ground
  * everywhere else.
  *
@@ -149,6 +179,9 @@ export function roadSurfaceAt(x, z) {
   const ground = terrainHeight(x, z);
   const w = bridgeInfluence(x, z);
   if (w <= 0) return { y: ground, onBridge: 0 };
+  // A stretch of deck that has been knocked out is not a road any more. The ground
+  // here is the channel bed, well under the water, so nothing will try to drive on it.
+  if (deckGone(x)) return { y: ground, onBridge: 0, broken: true };
   const deck = bridgeRoadHeight(x - BRIDGE_SPAN.x);
   if (deck === null) return { y: ground, onBridge: 0 };
   return { y: Math.max(ground, lerp(ground, deck, w)), onBridge: w };

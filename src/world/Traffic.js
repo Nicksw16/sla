@@ -131,8 +131,12 @@ export function nextJunction(v) {
 export function roadExists(axis, line, s) {
   const probe = { axis, line, side: 1, lane: 0, s };
   const p = vehicleXZ(probe);
-  if (!isWater(p.x, p.z)) return true;
-  return bridgeInfluence(p.x, p.z) > 0;
+  // A span that has been knocked into the channel is not a road any more. Asking the
+  // road surface rather than the bridge's outline is what makes that true here:
+  // the outline is a fact about where the bridge was built, the surface is a fact
+  // about what is still standing.
+  if (onBridgeRoad(axis, line, s)) return roadSurfaceAt(p.x, p.z).onBridge > 0;
+  return !isWater(p.x, p.z);
 }
 
 /** Acceleration from the intelligent-driver model, given the gap to what is ahead. */

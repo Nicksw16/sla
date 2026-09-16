@@ -71,7 +71,9 @@ function world() {
   }
   const field = new DestructionField({ bus });
   for (const b of landmarks.userData.destructibles) field.add(b);
-  return { grid, landmarks, field, bus, events, towers: landmarks.userData.destructibles };
+  // The towers specifically. `destructibles` also carries the bridge deck now, which
+  // is a structure of a different shape that answers the same interface.
+  return { grid, landmarks, field, bus, events, towers: landmarks.userData.towers };
 }
 
 const DIRS = {

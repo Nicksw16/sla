@@ -4,6 +4,7 @@ import { Rng } from '../core/Rng.js';
 import { LANDMARKS, RUNWAY } from '../data/regions.js';
 import { terrainHeight, isWater } from './Terrain.js';
 import { BRIDGE, bridgeRoadHeight } from './Roads.js';
+import { DestructibleBridge } from './BridgeStructure.js';
 import { DestructibleBuilding, RigidProp } from './Destructible.js';
 
 /**
@@ -167,6 +168,13 @@ class BoxBatch {
   }
 }
 
+/** The deck's own material. Vertex-coloured: one segment carries slab, road and paint. */
+function bridgeDeckMaterial() {
+  return new THREE.MeshStandardMaterial({
+    vertexColors: true, roughness: 0.88, metalness: 0.05,
+  });
+}
+
 /**
  * Northgate Bridge. The gap under the deck is a legal shortcut (spec §24, §34).
  *
@@ -193,14 +201,11 @@ function buildBridge(g, grid, L, mats) {
   const towerTop = deckY + h - 22;
   const halfW = deckW / 2;
 
-  // --- main deck, as a thin slab: only the slab itself blocks, so flying under works.
-  g.add(mesh(new THREE.BoxGeometry(spanHalf * 2, 3.4, deckW), mats.concrete, L.x, deckY, L.z));
-  g.add(mesh(new THREE.BoxGeometry(spanHalf * 2, 0.5, deckW - 3), mats.asphalt, L.x, deckY + 1.95, L.z));
-  g.add(mesh(new THREE.BoxGeometry(spanHalf * 2 - 40, 0.1, 1.1), mats.marking, L.x, deckY + 2.25, L.z));
-  for (const zo of [-halfW, halfW]) {
-    g.add(mesh(new THREE.BoxGeometry(spanHalf * 2, 2.2, 1.2), mats.steel, L.x, deckY + 2.4, L.z + zo));
-  }
-  grid.add(L.x - spanHalf, L.x + spanHalf, L.z - halfW, L.z + halfW, deckY - 3, deckY + 4, 'bridge');
+  // The roadway itself - deck, wearing course, markings and parapets, over the span and
+  // both approaches - is not built here. It belongs to DestructibleBridge, which cuts it
+  // into segments that can fail one at a time, because a bridge that can only be whole
+  // or gone cannot fall from the point somebody hit it. What is built here is what
+  // carries it: the piers, the pylons, the cable and the approach piers.
 
   // --- the cable, as a height above the deck at any point along it.
   //
@@ -259,9 +264,6 @@ function buildBridge(g, grid, L, mats) {
   // road on an embankment and a road hanging in the air.
   const run = BRIDGE.GRADE_RUN + BRIDGE.LEVEL_RUN;
   const segs = BRIDGE.RAMP_SEGS;
-  const road = new BoxBatch(mats.asphalt, segs * 2 + 4);
-  const parapet = new BoxBatch(mats.concrete, segs * 4 + 8);
-  const stripe = new BoxBatch(mats.marking, segs * 2 + 4);
   const piers = new BoxBatch(mats.concrete, segs * 6 + 8);
 
   for (const side of [-1, 1]) {
@@ -279,12 +281,6 @@ function buildBridge(g, grid, L, mats) {
       const mx = (a.x + b.x) / 2;
       const my = (a.y + b.y) / 2;
       const len = Math.hypot(b.x - a.x, b.y - a.y);
-      road.add(mx, my, L.z, len, 3.4, deckW, lean);
-      stripe.add(mx, my + 1.85, L.z, len * 0.92, 0.1, 1.1, lean);
-      for (const zo of [-halfW, halfW]) {
-        parapet.add(mx, my + 1.6, L.z + zo, len, 2, 1.2, lean);
-      }
-
       // A pier under the slab wherever the road is clear of the ground, founded on the
       // bed where that ground is under water.
       const ground = terrainHeight(mx, L.z);
@@ -300,16 +296,9 @@ function buildBridge(g, grid, L, mats) {
           ground, my - 1.3, 'bridge');
       }
 
-      const lo = Math.min(a.y, b.y);
-      const hi = Math.max(a.y, b.y);
-      grid.add(Math.min(a.x, b.x), Math.max(a.x, b.x), L.z - halfW, L.z + halfW,
-        lo - 3, hi + 4, 'bridge');
       a = b;
     }
   }
-  road.finish(g);
-  parapet.finish(g);
-  stripe.finish(g);
   piers.finish(g);
 }
 
@@ -834,7 +823,18 @@ export function createLandmarks(grid) {
       case 'spire': beacons.push(buildSpire(group, grid, L, mats)); break;
       case 'obelisk': beacons.push(buildObelisk(group, grid, L, mats)); break;
       case 'stadium': buildStadium(group, grid, L, mats); break;
-      case 'bridge': buildBridge(group, grid, L, mats); break;
+      case 'bridge': {
+        buildBridge(group, grid, L, mats);
+        // The roadway is a structure in its own right, and one that can come down from
+        // whichever end of it somebody flies into.
+        const deck = new DestructibleBridge({
+          parent: group, grid, material: bridgeDeckMaterial(),
+        });
+        deck.registerColliders();
+        destructibles.push(deck);
+        group.userData.bridge = deck;
+        break;
+      }
       case 'wheel': wheel = buildWheel(group, grid, L, mats); break;
       case 'cranes': buildCranes(group, grid, L, mats); break;
       case 'dam': buildDam(group, grid, L, mats); break;
@@ -844,6 +844,10 @@ export function createLandmarks(grid) {
         const twins = buildTwinTowers(group, grid, L, mats);
         beacons.push(...twins.beacons);
         destructibles.push(...twins.towers);
+        // Named separately as well. `destructibles` is everything the destruction field
+        // should manage, which now includes the bridge deck - a different kind of
+        // structure that shares the interface but not the lattice.
+        group.userData.towers = twins.towers;
         break;
       }
       default: break; // 'park' and 'peak' are terrain features, not structures
