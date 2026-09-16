@@ -139,7 +139,9 @@ export class TouchControls {
     this.knob.style.transform = `translate(${kx.toFixed(1)}px, ${ky.toFixed(1)}px)`;
     this.input.touch.roll = clamp(kx / STICK_RADIUS, -1, 1);
     // Screen down is nose down, the way a stick works.
-    this.input.touch.pitch = clamp(-ky / STICK_RADIUS, -1, 1);
+    // Dragged back to climb, like the column it stands in for and like every other
+    // input in the game.
+    this.input.touch.pitch = clamp(ky / STICK_RADIUS, -1, 1);
   }
 
   /** Shown while flying, hidden behind every menu. */

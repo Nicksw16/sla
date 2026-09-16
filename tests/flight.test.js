@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { AIRCRAFT, AIRCRAFT_ORDER } from '../src/data/aircraft.js';
 import { FlightModel } from '../src/flight/FlightModel.js';
 import { EventBus } from '../src/core/EventBus.js';
+import { DEFAULT_BINDINGS } from '../src/core/Input.js';
 
 const flatCollider = {
   groundHeight: () => 0,
@@ -393,6 +394,34 @@ test('a long frame cannot teleport the aircraft', () => {
   m.update(2.0, makeInput({ throttle: 1 }), null); // simulated hitch
   const moved = m.position.distanceTo(before);
   assert.ok(moved < 200 * (1 / 20) + 5, `moved ${moved.toFixed(1)} m on a 2 s frame`);
+});
+
+// --- the controls ------------------------------------------------------------------
+
+test('the keyboard is laid out the way an aeroplane is, not the way a camera is', () => {
+  // The column comes back to raise the nose. On a keyboard that is Down, and getting it
+  // the other way round - which is what this shipped with - makes the aircraft climb
+  // when you ask it to dive. It is obvious in the air and invisible everywhere else,
+  // so it is worth one assertion.
+  assert.ok(DEFAULT_BINDINGS.pitchUp.includes('ArrowDown'),
+    `the nose is raised with ${DEFAULT_BINDINGS.pitchUp.join('/')}`);
+  assert.ok(DEFAULT_BINDINGS.pitchDown.includes('ArrowUp'),
+    `the nose is dropped with ${DEFAULT_BINDINGS.pitchDown.join('/')}`);
+  assert.ok(!DEFAULT_BINDINGS.pitchUp.includes('ArrowUp'), 'and up is not also up');
+
+  // The rest of the layout, so a stray edit cannot quietly move the throttle onto the
+  // stick or the rudder onto the ailerons.
+  assert.deepEqual(DEFAULT_BINDINGS.throttleUp, ['KeyW']);
+  assert.deepEqual(DEFAULT_BINDINGS.throttleDown, ['KeyS']);
+  assert.ok(DEFAULT_BINDINGS.rollLeft.includes('KeyA') && DEFAULT_BINDINGS.rollLeft.includes('ArrowLeft'));
+  assert.ok(DEFAULT_BINDINGS.rollRight.includes('KeyD') && DEFAULT_BINDINGS.rollRight.includes('ArrowRight'));
+  assert.deepEqual(DEFAULT_BINDINGS.yawLeft, ['KeyQ']);
+  assert.deepEqual(DEFAULT_BINDINGS.yawRight, ['KeyE']);
+  // Pitch and roll are the same hand, because on an aircraft they are the same stick.
+  const stick = [...DEFAULT_BINDINGS.pitchUp, ...DEFAULT_BINDINGS.pitchDown,
+    ...DEFAULT_BINDINGS.rollLeft, ...DEFAULT_BINDINGS.rollRight];
+  assert.ok(stick.filter((k) => k.startsWith('Arrow')).length === 4,
+    'all four stick directions are on the arrow cluster');
 });
 
 console.log(`\n${passed} flight assertions passed\n`);

@@ -3,14 +3,25 @@ import { clamp, clamp01, damp, deadzone, expoCurve } from './MathUtils.js';
 /**
  * Default PC bindings follow spec §100. Pitch is on the arrow keys / mouse /
  * stick because the spec's list assigns W-S to throttle and A-D to turning.
+ *
+ * Pitch is the way round an aeroplane works, which is the opposite of the way a camera
+ * works. You pull a control column back to raise the nose and push it forward to drop
+ * it, so on a keyboard Down raises the nose and Up lowers it, on a mouse you draw the
+ * hand back to climb, and on a stick you pull. Every flight simulator defaults this way.
+ * This game did not: it used the camera convention, where up means up, which is right
+ * for a third-person camera and wrong for anything with wings.
+ *
+ * Anyone who prefers the other way has INVERT PITCH in the settings, which now inverts
+ * away from the aircraft convention rather than towards it.
  */
 export const DEFAULT_BINDINGS = {
   throttleUp: ['KeyW'],
   throttleDown: ['KeyS'],
   rollLeft: ['KeyA', 'ArrowLeft'],
   rollRight: ['KeyD', 'ArrowRight'],
-  pitchUp: ['ArrowUp'],
-  pitchDown: ['ArrowDown'],
+  // Pull back to climb: the key that raises the nose is Down.
+  pitchUp: ['ArrowDown'],
+  pitchDown: ['ArrowUp'],
   yawLeft: ['KeyQ'],
   yawRight: ['KeyE'],
   turbo: ['ShiftLeft', 'ShiftRight'],
@@ -208,13 +219,13 @@ export class Input {
       if (this.settings.get('mouseSteering')) {
         if (this.mouse.locked) {
           const k = 0.0022 * sens;
-          this._mouseAim.pitch = clamp(this._mouseAim.pitch - this.mouse.dy * k, -1, 1);
+          this._mouseAim.pitch = clamp(this._mouseAim.pitch + this.mouse.dy * k, -1, 1);
           this._mouseAim.roll = clamp(this._mouseAim.roll + this.mouse.dx * k, -1, 1);
           // Re-centres slowly so the aircraft returns to neutral when the hand stops.
           this._mouseAim.pitch = damp(this._mouseAim.pitch, 0, 1.6, dt);
           this._mouseAim.roll = damp(this._mouseAim.roll, 0, 1.6, dt);
         } else {
-          this._mouseAim.pitch = clamp(-this.mouse.y * 1.1, -1, 1);
+          this._mouseAim.pitch = clamp(this.mouse.y * 1.1, -1, 1);
           this._mouseAim.roll = clamp(this.mouse.x * 1.1, -1, 1);
         }
         if (Math.abs(this._mouseAim.pitch) > Math.abs(pitch)) pitch = this._mouseAim.pitch;
@@ -239,7 +250,7 @@ export class Input {
       if (pad) {
         const ax = (i) => deadzone(pad.axes[i] ?? 0);
         const gpRoll = ax(0);
-        const gpPitch = -ax(1);
+        const gpPitch = ax(1);
         const gpYaw = ax(2);
         if (Math.abs(gpRoll) > Math.abs(roll)) roll = gpRoll;
         if (Math.abs(gpPitch) > Math.abs(pitch)) pitch = gpPitch;

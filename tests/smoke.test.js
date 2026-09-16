@@ -326,8 +326,13 @@ async function main() {
     () => ({ value: window.__skyline.flight.bank, control: window.__skyline.flight.control.roll }), 1);
   await axisCheck('A banks the aircraft left', 'a',
     () => ({ value: window.__skyline.flight.bank, control: window.__skyline.flight.control.roll }), -1);
-  await axisCheck('the up arrow raises the nose', 'ArrowUp',
+  // Pitch the way an aeroplane works: the column comes back to raise the nose, so the
+  // key that climbs is Down. Asserting both directions, because getting this backwards
+  // is exactly the kind of thing that is obvious in the air and invisible in a test.
+  await axisCheck('the down arrow raises the nose, as a control column does', 'ArrowDown',
     () => ({ value: window.__skyline.flight.pitchAngle, control: window.__skyline.flight.control.pitch }), 1);
+  await axisCheck('and the up arrow drops it', 'ArrowUp',
+    () => ({ value: window.__skyline.flight.pitchAngle, control: window.__skyline.flight.control.pitch }), -1);
   await axisCheck('Q applies left rudder', 'q',
     () => ({ value: window.__skyline.flight.heading, control: window.__skyline.flight.control.yaw }), -1);
 
@@ -813,9 +818,9 @@ async function main() {
     survived.grounded && survived.respawnPending === 0, JSON.stringify(survived));
   await holdKey(page, 'w');
   await sleep(9000);
-  await holdKey(page, 'ArrowUp');
+  await holdKey(page, 'ArrowDown');
   await sleep(6000);
-  await releaseKey(page, 'ArrowUp');
+  await releaseKey(page, 'ArrowDown');
   await releaseKey(page, 'w');
   const airborne = await page.evaluate(() => ({
     grounded: window.__skyline.flight.grounded,
@@ -939,8 +944,9 @@ async function flyMission(page, { simSeconds, wallMs }) {
     // Pitch toward the gate. The ground reflex is deliberately tight: at 140 m it
     // fired over every tall building downtown and pulled the aircraft off the gate.
     const wantClimb = s.agl < 70 ? 0.3 : s.elevation + Math.abs(s.bank) * 0.14;
-    if (wantClimb > 0.05) want.add('ArrowUp');
-    else if (wantClimb < -0.06) want.add('ArrowDown');
+    // Down to climb: the pilot pulls back on the column like anything else with wings.
+    if (wantClimb > 0.05) want.add('ArrowDown');
+    else if (wantClimb < -0.06) want.add('ArrowUp');
     // Keep the throttle up, and ease off only if genuinely overspeeding into a corner.
     if (s.speed < s.maxSpeed * 0.82 || s.stall > 0.2) want.add('w');
     else if (Math.abs(s.bearing) > 0.7 && s.dist < 300) want.add('s');

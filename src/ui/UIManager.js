@@ -703,7 +703,7 @@ export class UIManager {
   }
 
   _bindingSummary() {
-    return 'W/S throttle · A/D roll · ↑/↓ pitch · Q/E rudder · SHIFT turbo · SPACE airbrake · Z recover · C camera · V look back · R reset · M map · H hud · ESC pause';
+    return 'W/S throttle · A/D roll · ↓ nose up / ↑ nose down · Q/E rudder · SHIFT turbo · SPACE airbrake · Z recover · C camera · V look back · R reset · M map · H hud · ESC pause';
   }
 
   // -------------------------------------------------------------------- results
