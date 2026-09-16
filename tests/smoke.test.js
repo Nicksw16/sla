@@ -365,12 +365,16 @@ async function main() {
   // runs several times slower than real time, and the scripted pilot is not efficient.
   // FAST=1 shortens the hand-flown section when the point of the run is the rest of
   // the suite; the mission is then completed on rails below either way.
-  const flightBudget = process.env.FAST === '1' ? 60000 : 480000;
-  const flight = await flyMission(page, flightBudget);
+  // Simulated seconds of flying time, plus a wall-clock guard for a page that has
+  // stopped rendering. The mission itself takes seventy to a hundred simulated
+  // seconds, so this is generous by a factor of three.
+  const flightBudget = process.env.FAST === '1' ? 40 : 240;
+  const flight = await flyMission(page, { simSeconds: flightBudget, wallMs: 1500000 });
   check('checkpoints can be flown through', flight.passed > 0, `${flight.passed}/${flight.total} gates`);
   const expectedGates = process.env.FAST === '1' ? 1 : 4;
   check('the route can be flown on the keyboard', flight.passed >= expectedGates,
-    `${flight.passed}/${flight.total} gates flown by the scripted pilot in ${flightBudget / 1000} s`);
+    `${flight.passed}/${flight.total} gates flown by the scripted pilot `
+    + `in ${flightBudget} s of flying time`);
 
   // If the scripted pilot ran out of budget, fly the remainder deterministically.
   // The point of the checks below is the mission pipeline - completion, scoring,
@@ -843,8 +847,20 @@ async function main() {
  * player would hold. Deliberately simple: if a controller this crude can complete the
  * first mission, the controls are not the obstacle.
  */
-async function flyMission(page, budgetMs) {
-  const deadline = Date.now() + budgetMs;
+async function flyMission(page, { simSeconds, wallMs }) {
+  // The budget is simulated seconds, not wall-clock ones.
+  //
+  // This was the last place in the suite measuring the machine instead of the game.
+  // The pilot's decisions were already paced on the game clock - one every 0.3 s of
+  // simulated time, whatever the frame rate - but the budget it spent them against was
+  // still eight minutes of wall clock, so on a loaded machine fewer of those decisions
+  // fitted into the run and the same pilot flying the same route reached a different
+  // gate. Three of its gates on one run, six on the next, with nothing changed between
+  // them. The wall-clock figure stays only as a guard against a page that has stopped
+  // rendering altogether, where waiting on the game clock would wait forever.
+  const wallDeadline = Date.now() + wallMs;
+  let startClock = null;
+  let clock = 0;
   const held = new Set();
   const setKeys = async (wanted) => {
     for (const k of held) if (!wanted.has(k)) { await releaseKey(page, k); held.delete(k); }
@@ -864,7 +880,7 @@ async function flyMission(page, budgetMs) {
   const STEP = 0.3;
   let lastClock = null;
   let pause = 80;
-  while (Date.now() < deadline) {
+  while (clock < simSeconds && Date.now() < wallDeadline) {
     let s;
     try {
       s = await evaluate(page, () => {
@@ -945,6 +961,8 @@ async function flyMission(page, budgetMs) {
       pause = Math.max(0, Math.min(200, pause * (STEP / advanced)));
     }
     lastClock = s.clock;
+    if (startClock === null) startClock = s.clock;
+    clock = s.clock - startClock;
     if (pause > 0) await sleep(pause);
   }
 
